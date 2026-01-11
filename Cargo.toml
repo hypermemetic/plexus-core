@@ -1,0 +1,54 @@
+[workspace]
+members = ["."]
+
+[package]
+name = "hub-core"
+version = "0.2.0"
+edition = "2021"
+description = "Core hub infrastructure - plexus routing, activation framework, MCP bridge"
+license = "AGPL-3.0-only"
+
+[lib]
+name = "hub_core"
+path = "src/lib.rs"
+
+[dependencies]
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Async runtime
+tokio = { version = "1.0", features = ["full"] }
+tokio-stream = "0.1"
+futures = "0.3"
+futures-util = "0.3"
+async-trait = "0.1"
+async-stream = "0.3"
+
+# Error handling
+thiserror = "1.0"
+anyhow = "1.0"
+
+# Schema generation
+schemars = { version = "1.1", features = ["derive", "uuid1"] }
+
+# Core types
+uuid = { version = "1.6", features = ["v4", "v5", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+
+# Logging
+tracing = "0.1"
+
+# JSON-RPC server
+jsonrpsee = { version = "0.26", features = ["server", "macros"] }
+
+# MCP server
+rmcp = { version = "0.12", features = ["server", "transport-io", "transport-streamable-http-server"] }
+
+# Hub macro for activation generation
+hub-macro = { path = "../hub-macro" }
+
+[dev-dependencies]
+tempfile = "3"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+tokio-test = "0.4"

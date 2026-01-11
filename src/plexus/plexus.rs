@@ -63,34 +63,6 @@ impl std::fmt::Display for TransportErrorKind {
             }
         }
     }
-}
-
-impl std::fmt::Display for PlexusError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            PlexusError::ActivationNotFound(name) => write!(f, "Activation not found: {}", name),
-            PlexusError::MethodNotFound { activation, method } => {
-                write!(f, "Method not found: {}.{}", activation, method)
-            }
-            PlexusError::InvalidParams(msg) => write!(f, "Invalid params: {}", msg),
-            PlexusError::ExecutionError(msg) => write!(f, "Execution error: {}", msg),
-            PlexusError::HandleNotSupported(activation) => {
-                write!(f, "Handle resolution not supported by activation: {}", activation)
-            }
-            PlexusError::TransportError(kind) => match kind {
-                TransportErrorKind::ConnectionRefused { host, port } => {
-                    write!(f, "Connection refused to {}:{}", host, port)
-                }
-                TransportErrorKind::ConnectionTimeout { host, port } => {
-                    write!(f, "Connection timeout to {}:{}", host, port)
-                }
-                TransportErrorKind::ProtocolError { message } => {
-                    write!(f, "Protocol error: {}", message)
-                }
-                TransportErrorKind::NetworkError { message } => {
-                    write!(f, "Network error: {}", message)
-                }
-            }
         }
     }
 }
@@ -109,6 +81,12 @@ pub struct ActivationInfo {
     pub methods: Vec<String>,
 }
 
+=======
+/// Full schema for an activation (deprecated - use PluginSchema)
+#[deprecated(note = "Use PluginSchema instead")]
+pub type ActivationFullSchema = PluginSchema;
+
+>>>>>>> 22c26de (Initial commit: hub-core library)
 // ============================================================================
 // Activation Trait
 // ============================================================================
@@ -849,187 +827,6 @@ impl DynamicHub {
             }
         )?;
 
-        // Add all registered activation RPC methods
-        let pending = std::mem::take(&mut *self.inner.pending_rpc.lock().unwrap());
-        for factory in pending {
-            module.merge(factory())?;
-        }
-
-        Ok(module)
-    }
-
-    /// Convert Arc<DynamicHub> to RPC module while keeping the Arc alive
-    ///
-    /// Unlike `into_rpc_module`, this keeps the Arc<DynamicHub> reference alive,
-    /// which is necessary when activations hold Weak<DynamicHub> references that
-    /// need to remain upgradeable.
-    pub fn arc_into_rpc_module(hub: Arc<Self>) -> Result<RpcModule<()>, jsonrpsee::core::RegisterMethodError> {
-        let mut module = RpcModule::new(());
-
-        PlexusContext::init(hub.compute_hash());
-
-        // Register hub methods with runtime namespace using dot notation (e.g., "plexus.call" or "hub.call")
-        // Note: we leak these strings to get 'static lifetime required by jsonrpsee
-        let ns = hub.runtime_namespace();
-        let call_method: &'static str = Box::leak(format!("{}.call", ns).into_boxed_str());
-        let call_unsub: &'static str = Box::leak(format!("{}.call_unsub", ns).into_boxed_str());
-        let hash_method: &'static str = Box::leak(format!("{}.hash", ns).into_boxed_str());
-        let hash_unsub: &'static str = Box::leak(format!("{}.hash_unsub", ns).into_boxed_str());
-        let schema_method: &'static str = Box::leak(format!("{}.schema", ns).into_boxed_str());
-        let schema_unsub: &'static str = Box::leak(format!("{}.schema_unsub", ns).into_boxed_str());
-        let hash_content_type: &'static str = Box::leak(format!("{}.hash", ns).into_boxed_str());
-        let schema_content_type: &'static str = Box::leak(format!("{}.schema", ns).into_boxed_str());
-        let ns_static: &'static str = Box::leak(ns.to_string().into_boxed_str());
-
-        // Register {ns}.call subscription - clone Arc to keep reference alive
-        let hub_for_call = hub.clone();
-        module.register_subscription(
-            call_method,
-            call_method,
-            call_unsub,
-            move |params, pending, _ctx, _ext| {
-                let hub = hub_for_call.clone();
-                Box::pin(async move {
-                    let p: CallParams = params.parse()?;
-                    let stream = hub.route(&p.method, p.params.unwrap_or_default()).await
-                        .map_err(|e| jsonrpsee::types::ErrorObject::owned(-32000, e.to_string(), None::<()>))?;
-                    pipe_stream_to_subscription(pending, stream).await
-                })
-            }
-        )?;
-
-        // Register {ns}.hash subscription
-        let hub_for_hash = hub.clone();
-        module.register_subscription(
-            hash_method,
-            hash_method,
-            hash_unsub,
-            move |_params, pending, _ctx, _ext| {
-                let hub = hub_for_hash.clone();
-                Box::pin(async move {
-                    let schema = Activation::plugin_schema(&*hub);
-                    let stream = async_stream::stream! {
-                        yield HashEvent::Hash { value: schema.hash };
-                    };
-                    let wrapped = super::streaming::wrap_stream(stream, hash_content_type, vec![ns_static.into()]);
-                    pipe_stream_to_subscription(pending, wrapped).await
-                })
-            }
-        )?;
-
-        // Register {ns}.schema subscription
-        let hub_for_schema = hub.clone();
-        module.register_subscription(
-            schema_method,
-            schema_method,
-            schema_unsub,
-            move |params, pending, _ctx, _ext| {
-                let hub = hub_for_schema.clone();
-                Box::pin(async move {
-                    let p: SchemaParams = params.parse().unwrap_or_default();
-                    let plugin_schema = Activation::plugin_schema(&*hub);
-
-                    let result = if let Some(ref name) = p.method {
-                        plugin_schema.methods.iter()
-                            .find(|m| m.name == *name)
-                            .map(|m| super::SchemaResult::Method(m.clone()))
-                            .ok_or_else(|| jsonrpsee::types::ErrorObject::owned(
-                                -32602,
-                                format!("Method '{}' not found", name),
-                                None::<()>,
-                            ))?
-                    } else {
-                        super::SchemaResult::Plugin(plugin_schema)
-                    };
-
-                    let stream = async_stream::stream! {
-                        yield result;
-                    };
-                    let wrapped = super::streaming::wrap_stream(stream, schema_content_type, vec![ns_static.into()]);
-                    pipe_stream_to_subscription(pending, wrapped).await
-                })
-            }
-        )?;
-
-        // Register _info well-known endpoint (no namespace prefix)
-        // Returns backend name as a single-item stream with automatic Done event
-        let backend_name = hub.runtime_namespace().to_string();
-        module.register_subscription(
-            "_info",
-            "_info",
-            "_info_unsub",
-            move |_params, pending, _ctx, _ext| {
-                let name = backend_name.clone();
-                Box::pin(async move {
-                    // Create a single-item stream with the info response
-                    let info_stream = futures::stream::once(async move {
-                        serde_json::json!({"backend": name})
-                    });
-
-                    // Wrap to auto-append Done event
-                    let wrapped = super::streaming::wrap_stream(
-                        info_stream,
-                        "_info",
-                        vec![]
-                    );
-
-                    // Pipe to subscription (handles Done automatically)
-                    pipe_stream_to_subscription(pending, wrapped).await
-                })
-            }
-        )?;
-
-        // Register {ns}.respond method for WebSocket bidirectional responses
-        // This allows clients to respond to server-initiated requests (like confirmations/prompts)
-        let respond_method: &'static str = Box::leak(format!("{}.respond", ns).into_boxed_str());
-        module.register_async_method(respond_method, |params, _ctx, _ext| async move {
-            use super::bidirectional::{handle_pending_response, BidirError};
-
-            let p: RespondParams = params.parse()?;
-
-            tracing::debug!(
-                request_id = %p.request_id,
-                "Handling {}.respond via WebSocket",
-                "plexus"
-            );
-
-            match handle_pending_response(&p.request_id, p.response_data) {
-                Ok(()) => Ok(serde_json::json!({"success": true})),
-                Err(BidirError::UnknownRequest) => {
-                    tracing::warn!(request_id = %p.request_id, "Unknown request ID in respond");
-                    Err(jsonrpsee::types::ErrorObject::owned(
-                        -32602,
-                        format!("Unknown request ID: {}. The request may have timed out or been cancelled.", p.request_id),
-                        None::<()>,
-                    ))
-                }
-                Err(BidirError::ChannelClosed) => {
-                    tracing::warn!(request_id = %p.request_id, "Channel closed in respond");
-                    Err(jsonrpsee::types::ErrorObject::owned(
-                        -32000,
-                        "Response channel was closed (request may have timed out)",
-                        None::<()>,
-                    ))
-                }
-                Err(e) => {
-                    tracing::error!(request_id = %p.request_id, error = ?e, "Error in respond");
-                    Err(jsonrpsee::types::ErrorObject::owned(
-                        -32000,
-                        format!("Failed to deliver response: {}", e),
-                        None::<()>,
-                    ))
-                }
-            }
-        })?;
-
-        // Register pending RPC methods from activations
-        let pending = std::mem::take(&mut *hub.inner.pending_rpc.lock().unwrap());
-        for factory in pending {
-            module.merge(factory())?;
-        }
-
-        Ok(module)
-    }
 }
 
 /// Params for {ns}.call
@@ -1053,27 +850,6 @@ struct RespondParams {
     response_data: Value,
 }
 
-/// Helper to pipe a PlexusStream to a subscription sink
-async fn pipe_stream_to_subscription(
-    pending: jsonrpsee::PendingSubscriptionSink,
-    mut stream: PlexusStream,
-) -> jsonrpsee::core::SubscriptionResult {
-    use futures::StreamExt;
-    use jsonrpsee::SubscriptionMessage;
-
-    let sink = pending.accept().await?;
-    while let Some(item) = stream.next().await {
-        let msg = SubscriptionMessage::new("result", sink.subscription_id(), &item)?;
-        sink.send(msg).await?;
-    }
-    Ok(())
-}
-
-// ============================================================================
-// DynamicHub RPC Methods (via plexus-macros)
-// ============================================================================
-
-#[plexus_macros::hub_methods(
     namespace = "plexus",
     version = "1.0.0",
     description = "Central routing and introspection",

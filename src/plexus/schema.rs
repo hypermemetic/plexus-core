@@ -224,23 +224,6 @@ impl PluginSchema {
             long_description: None,
             self_hash,
             children_hash,
-            hash,
-            methods,
-            children: None,
-        }
-    }
-
-    /// Create a new leaf plugin schema with long description
-    pub fn leaf_with_long_description(
-        namespace: impl Into<String>,
-        version: impl Into<String>,
-        description: impl Into<String>,
-        long_description: impl Into<String>,
-        methods: Vec<MethodSchema>,
-    ) -> Self {
-        let namespace = namespace.into();
-        Self::validate_no_collisions(&namespace, &methods, None);
-        let (self_hash, children_hash, hash) = Self::compute_hashes(&methods, None);
         Self {
             namespace,
             version: version.into(),
@@ -248,23 +231,6 @@ impl PluginSchema {
             long_description: Some(long_description.into()),
             self_hash,
             children_hash,
-            hash,
-            methods,
-            children: None,
-        }
-    }
-
-    /// Create a new hub plugin schema (with child summaries)
-    pub fn hub(
-        namespace: impl Into<String>,
-        version: impl Into<String>,
-        description: impl Into<String>,
-        methods: Vec<MethodSchema>,
-        children: Vec<ChildSummary>,
-    ) -> Self {
-        let namespace = namespace.into();
-        Self::validate_no_collisions(&namespace, &methods, Some(&children));
-        let (self_hash, children_hash, hash) = Self::compute_hashes(&methods, Some(&children));
         Self {
             namespace,
             version: version.into(),
@@ -272,24 +238,6 @@ impl PluginSchema {
             long_description: None,
             self_hash,
             children_hash,
-            hash,
-            methods,
-            children: Some(children),
-        }
-    }
-
-    /// Create a new hub plugin schema with long description
-    pub fn hub_with_long_description(
-        namespace: impl Into<String>,
-        version: impl Into<String>,
-        description: impl Into<String>,
-        long_description: impl Into<String>,
-        methods: Vec<MethodSchema>,
-        children: Vec<ChildSummary>,
-    ) -> Self {
-        let namespace = namespace.into();
-        Self::validate_no_collisions(&namespace, &methods, Some(&children));
-        let (self_hash, children_hash, hash) = Self::compute_hashes(&methods, Some(&children));
         Self {
             namespace,
             version: version.into(),
@@ -297,55 +245,6 @@ impl PluginSchema {
             long_description: Some(long_description.into()),
             self_hash,
             children_hash,
-            hash,
-            methods,
-            children: Some(children),
-        }
-    }
-
-    /// Check if this is a hub (has children)
-    pub fn is_hub(&self) -> bool {
-        self.children.is_some()
-    }
-
-    /// Check if this is a leaf (no children)
-    pub fn is_leaf(&self) -> bool {
-        self.children.is_none()
-    }
-}
-
-/// Summary of a child plugin
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct ChildSummary {
-    /// The child's namespace
-    pub namespace: String,
-
-    /// Human-readable description
-    pub description: String,
-
-    /// Content hash for cache invalidation
-    pub hash: String,
-}
-
-/// Schema summary containing only hashes (for cache validation)
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct PluginHashes {
-    pub namespace: String,
-    pub self_hash: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub children_hash: Option<String>,
-    pub hash: String,
-    /// Child plugin hashes (for recursive checking)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub children: Option<Vec<ChildHashes>>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct ChildHashes {
-    pub namespace: String,
-    pub hash: String,
-}
-
 impl MethodSchema {
     /// Create a new method schema with name, description, and hash
     ///
@@ -366,67 +265,6 @@ impl MethodSchema {
             bidirectional: false,
             request_type: None,
             response_type: None,
-        }
-    }
-
-    /// Add parameter schema
-    pub fn with_params(mut self, params: schemars::Schema) -> Self {
-        self.params = Some(params);
-        self
-    }
-
-    /// Add return type schema
-    pub fn with_returns(mut self, returns: schemars::Schema) -> Self {
-        self.returns = Some(returns);
-        self
-    }
-
-    /// Set the streaming flag
-    ///
-    /// - `true` → method streams multiple events (use `AsyncGenerator<T>`)
-    /// - `false` → method returns single result (use `Promise<T>`)
-    pub fn with_streaming(mut self, streaming: bool) -> Self {
-        self.streaming = streaming;
-        self
-    }
-
-    /// Set whether this method supports bidirectional communication
-    ///
-    /// When true, the server can send requests to the client during method
-    /// execution and wait for responses.
-    pub fn with_bidirectional(mut self, bidirectional: bool) -> Self {
-        self.bidirectional = bidirectional;
-        self
-    }
-
-    /// Set the JSON Schema for server-to-client request types
-    ///
-    /// Only relevant when `bidirectional: true`. Use `schema_for!(YourRequestType)`
-    /// to generate the schema.
-    pub fn with_request_type(mut self, schema: schemars::Schema) -> Self {
-        self.request_type = Some(schema);
-        self
-    }
-
-    /// Set the JSON Schema for client-to-server response types
-    ///
-    /// Only relevant when `bidirectional: true`. Use `schema_for!(YourResponseType)`
-    /// to generate the schema.
-    pub fn with_response_type(mut self, schema: schemars::Schema) -> Self {
-        self.response_type = Some(schema);
-        self
-    }
-
-    /// Configure method for standard bidirectional communication
-    ///
-    /// Sets `bidirectional: true` and configures request/response types to use
-    /// `StandardRequest` and `StandardResponse`, which support common UI patterns
-    /// like confirmations, prompts, and selections.
-    pub fn with_standard_bidirectional(self) -> Self {
-        self.with_bidirectional(true)
-            .with_request_type(schema_for!(StandardRequest).into())
-            .with_response_type(schema_for!(StandardResponse).into())
-    }
 }
 
 // ============================================================================

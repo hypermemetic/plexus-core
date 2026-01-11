@@ -4,6 +4,7 @@
 pub mod context;
 pub mod dispatch;
 pub mod errors;
+pub mod hub_context;
 pub mod method_enum;
 pub mod middleware;
 pub mod path;
@@ -28,3 +29,4 @@ pub use method_enum::MethodEnumSchema;
 pub use streaming::{PlexusStream, wrap_stream, wrap_stream_with_done, error_stream, done_stream, progress_stream};
 pub use plexus::PlexusMethod;
 pub use dispatch::{HubDispatch, StreamItem, from_dispatch_stream};
+pub use hub_context::{HubContext, ParentAware, NoParent};

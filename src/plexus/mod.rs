@@ -1,6 +1,7 @@
 // Guidance system removed during caller-wraps streaming architecture refactor
 // pub mod guidance;
 
+pub mod bidirectional;
 pub mod context;
 pub mod dispatch;
 pub mod errors;
@@ -11,6 +12,7 @@ pub mod path;
 pub mod plexus;
 pub mod schema;
 pub mod streaming;
+pub mod transport;
 pub mod types;
 
 pub use context::PlexusContext;
@@ -30,3 +32,5 @@ pub use streaming::{PlexusStream, wrap_stream, wrap_stream_with_done, error_stre
 pub use plexus::PlexusMethod;
 pub use dispatch::{HubDispatch, StreamItem, from_dispatch_stream};
 pub use hub_context::{HubContext, ParentAware, NoParent};
+pub use bidirectional::{BidirChannel, BidirectionalContext, BidirError, BidirExt, BidirWithFallback, ClientResponse, TimeoutConfig, bidir_error_message, RequestType, ResponsePayload, SelectOption};
+pub use transport::{SubscriptionMessage, ClientMessage};

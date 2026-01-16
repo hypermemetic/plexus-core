@@ -234,6 +234,28 @@ impl ServerHandler for PlexusMcpBridge {
                 PlexusStreamItem::Done { .. } => {
                     break;
                 }
+
+                PlexusStreamItem::Request {
+                    request_id,
+                    request_type,
+                    ..
+                } => {
+                    // TODO: Implement bidirectional request handling in BIDIR-3
+                    // For now, log that a request was received
+                    let _ = ctx
+                        .peer
+                        .notify_logging_message(LoggingMessageNotificationParam {
+                            level: LoggingLevel::Warning,
+                            logger: Some(logger.clone()),
+                            data: json!({
+                                "type": "request_ignored",
+                                "request_id": request_id,
+                                "request_type": format!("{:?}", request_type),
+                                "message": "Bidirectional requests not yet implemented",
+                            }),
+                        })
+                        .await;
+                }
             }
         }
 

@@ -90,6 +90,17 @@ pub struct MethodSchema {
     /// tells clients how to present the result.
     #[serde(default)]
     pub streaming: bool,
+
+    /// Whether this method supports bidirectional communication
+    ///
+    /// - `bidirectional: true` → method may send interactive requests to clients
+    ///   (confirmations, prompts, selections) and wait for responses
+    /// - `bidirectional: false` → method only streams data, no client interaction
+    ///
+    /// Transports that support bidirectional (like MCP with `_plexus_respond`)
+    /// should handle Request stream items appropriately.
+    #[serde(default)]
+    pub bidirectional: bool,
 }
 
 impl PluginSchema {
@@ -290,6 +301,7 @@ impl MethodSchema {
             params: None,
             returns: None,
             streaming: false,
+            bidirectional: false,
         }
     }
 
@@ -311,6 +323,15 @@ impl MethodSchema {
     /// - `false` → method returns single result (use `Promise<T>`)
     pub fn with_streaming(mut self, streaming: bool) -> Self {
         self.streaming = streaming;
+        self
+    }
+
+    /// Set the bidirectional flag
+    ///
+    /// - `true` → method may send interactive requests to clients
+    /// - `false` → method only streams data, no client interaction
+    pub fn with_bidirectional(mut self, bidirectional: bool) -> Self {
+        self.bidirectional = bidirectional;
         self
     }
 }

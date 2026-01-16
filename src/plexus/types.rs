@@ -36,6 +36,77 @@ impl StreamMetadata {
     }
 }
 
+/// Type of request for bidirectional client communication
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum RequestType {
+    /// Yes/no confirmation prompt
+    Confirm {
+        message: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        default: Option<bool>,
+    },
+    /// Free-form text input prompt
+    Prompt {
+        message: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        default: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        placeholder: Option<String>,
+    },
+    /// Selection from predefined options
+    Select {
+        message: String,
+        options: Vec<SelectOption>,
+        multi_select: bool,
+    },
+    /// Custom request type with optional schema
+    Custom {
+        type_name: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        schema: Option<Value>,
+    },
+}
+
+/// Option for Select request type
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SelectOption {
+    /// Value returned when this option is selected
+    pub value: String,
+    /// Human-readable label for display
+    pub label: String,
+    /// Optional description for additional context
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+
+/// Response from client to a Request
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ClientResponse {
+    /// Request ID this response correlates to
+    pub request_id: String,
+    /// The response payload
+    pub payload: ResponsePayload,
+}
+
+/// Payload variants for client responses
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ResponsePayload {
+    /// Response to Confirm request
+    Confirmed(bool),
+    /// Response to Prompt request
+    Text(String),
+    /// Response to Select request (selected values)
+    Selected(Vec<String>),
+    /// Response to Custom request
+    Custom(Value),
+    /// User cancelled the request
+    Cancelled,
+    /// Request timed out
+    Timeout,
+}
+
 /// Universal stream item - all activations emit this type
 ///
 /// The caller (Plexus routing layer) wraps activation responses with
@@ -82,6 +153,21 @@ pub enum PlexusStreamItem {
         /// Metadata from calling layer
         metadata: StreamMetadata,
     },
+
+    /// Request for client input (bidirectional communication)
+    Request {
+        /// Metadata from calling layer
+        metadata: StreamMetadata,
+        /// Unique identifier for correlating response
+        request_id: String,
+        /// Type of request and its parameters
+        request_type: RequestType,
+        /// Additional payload data
+        payload: Value,
+        /// Optional timeout in milliseconds
+        #[serde(skip_serializing_if = "Option::is_none")]
+        timeout_ms: Option<u64>,
+    },
 }
 
 impl PlexusStreamItem {
@@ -123,6 +209,23 @@ impl PlexusStreamItem {
         Self::Done { metadata }
     }
 
+    /// Create a Request item for bidirectional client communication
+    pub fn request(
+        metadata: StreamMetadata,
+        request_id: String,
+        request_type: RequestType,
+        payload: Value,
+        timeout_ms: Option<u64>,
+    ) -> Self {
+        Self::Request {
+            metadata,
+            request_id,
+            request_type,
+            payload,
+            timeout_ms,
+        }
+    }
+
     /// Get the metadata from any stream item variant
     pub fn metadata(&self) -> &StreamMetadata {
         match self {
@@ -130,6 +233,7 @@ impl PlexusStreamItem {
             Self::Progress { metadata, .. } => metadata,
             Self::Error { metadata, .. } => metadata,
             Self::Done { metadata } => metadata,
+            Self::Request { metadata, .. } => metadata,
         }
     }
 }

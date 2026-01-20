@@ -50,17 +50,6 @@ pub fn wrap_stream<T: Serialize + Send + 'static>(
     Box::pin(data_stream.chain(done_stream))
 }
 
-/// Wrap a typed stream and append a Done event
-///
-/// Alias for `wrap_stream` - both now include automatic Done events.
-#[deprecated(since = "0.2.0", note = "Use wrap_stream instead, which now includes Done")]
-pub fn wrap_stream_with_done<T: Serialize + Send + 'static>(
-    stream: impl Stream<Item = T> + Send + 'static,
-    content_type: &'static str,
-    provenance: Vec<String>,
-) -> PlexusStream {
-    wrap_stream(stream, content_type, provenance)
-}
 
 /// Create an error stream
 ///
@@ -173,19 +162,6 @@ mod tests {
         assert!(matches!(items[2], PlexusStreamItem::Done { .. }));
     }
 
-    #[tokio::test]
-    #[allow(deprecated)]
-    async fn test_wrap_stream_with_done() {
-        let events = vec![TestEvent { value: 1 }];
-        let input_stream = stream::iter(events);
-
-        let wrapped = wrap_stream_with_done(input_stream, "test.event", vec!["test".into()]);
-        let items: Vec<_> = wrapped.collect().await;
-
-        assert_eq!(items.len(), 2);
-        assert!(matches!(items[0], PlexusStreamItem::Data { .. }));
-        assert!(matches!(items[1], PlexusStreamItem::Done { .. }));
-    }
 
     #[tokio::test]
     async fn test_error_stream() {

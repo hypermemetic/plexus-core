@@ -26,7 +26,7 @@ pub use crate::types::Handle;
 pub use schema::{ChildSummary, MethodSchema, PluginSchema, Schema, SchemaProperty, SchemaResult, SchemaType};
 pub use types::{PlexusStreamItem, StreamMetadata};
 pub use method_enum::MethodEnumSchema;
-pub use streaming::{PlexusStream, wrap_stream, wrap_stream_with_done, error_stream, done_stream, progress_stream};
+pub use streaming::{PlexusStream, wrap_stream, error_stream, done_stream, progress_stream};
 pub use plexus::PlexusMethod;
 pub use dispatch::{HubDispatch, StreamItem, from_dispatch_stream};
 pub use hub_context::{HubContext, ParentAware, NoParent};

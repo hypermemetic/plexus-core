@@ -33,4 +33,4 @@ pub mod types;
 pub use builder::build_example_plexus;
 pub use mcp_bridge::PlexusMcpBridge;
 pub use plexus::{Activation, Plexus, PlexusError};
-pub use types::{Envelope, Handle, Origin};
+pub use types::{Envelope, Handle, HandleParseError, HandleResolutionParams, Origin};

@@ -1,9 +1,6 @@
-[workspace]
-members = ["."]
-
 [package]
 name = "hub-core"
-version = "0.2.0"
+version = "0.2.1-worktree"
 edition = "2021"
 description = "Core hub infrastructure - plexus routing, activation framework, MCP bridge"
 license = "AGPL-3.0-only"

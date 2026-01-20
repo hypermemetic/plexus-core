@@ -743,6 +743,108 @@ impl Plexus {
 
         Ok(module)
     }
+
+    /// Convert Arc<Plexus> to RPC module while keeping the Arc alive
+    ///
+    /// Unlike `into_rpc_module`, this keeps the Arc<Plexus> reference alive,
+    /// which is necessary when activations hold Weak<Plexus> references that
+    /// need to remain upgradeable.
+    pub fn arc_into_rpc_module(plexus: Arc<Self>) -> Result<RpcModule<()>, jsonrpsee::core::RegisterMethodError> {
+        let mut module = RpcModule::new(());
+
+        PlexusContext::init(plexus.compute_hash());
+
+        // Register plexus methods with runtime namespace using dot notation (e.g., "plexus.call")
+        // Note: we leak these strings to get 'static lifetime required by jsonrpsee
+        let ns = plexus.runtime_namespace();
+        let call_method: &'static str = Box::leak(format!("{}.call", ns).into_boxed_str());
+        let call_unsub: &'static str = Box::leak(format!("{}.call_unsub", ns).into_boxed_str());
+        let hash_method: &'static str = Box::leak(format!("{}.hash", ns).into_boxed_str());
+        let hash_unsub: &'static str = Box::leak(format!("{}.hash_unsub", ns).into_boxed_str());
+        let schema_method: &'static str = Box::leak(format!("{}.schema", ns).into_boxed_str());
+        let schema_unsub: &'static str = Box::leak(format!("{}.schema_unsub", ns).into_boxed_str());
+        let hash_content_type: &'static str = Box::leak(format!("{}.hash", ns).into_boxed_str());
+        let schema_content_type: &'static str = Box::leak(format!("{}.schema", ns).into_boxed_str());
+        let ns_static: &'static str = Box::leak(ns.to_string().into_boxed_str());
+
+        // Register {ns}.call subscription - clone Arc to keep reference alive
+        let plexus_for_call = plexus.clone();
+        module.register_subscription(
+            call_method,
+            call_method,
+            call_unsub,
+            move |params, pending, _ctx, _ext| {
+                let plexus = plexus_for_call.clone();
+                Box::pin(async move {
+                    let p: CallParams = params.parse()?;
+                    let stream = plexus.route(&p.method, p.params.unwrap_or_default()).await
+                        .map_err(|e| jsonrpsee::types::ErrorObject::owned(-32000, e.to_string(), None::<()>))?;
+                    pipe_stream_to_subscription(pending, stream).await
+                })
+            }
+        )?;
+
+        // Register {ns}.hash subscription
+        let plexus_for_hash = plexus.clone();
+        module.register_subscription(
+            hash_method,
+            hash_method,
+            hash_unsub,
+            move |_params, pending, _ctx, _ext| {
+                let plexus = plexus_for_hash.clone();
+                Box::pin(async move {
+                    let schema = Activation::plugin_schema(&*plexus);
+                    let stream = async_stream::stream! {
+                        yield HashEvent::Hash { value: schema.hash };
+                    };
+                    let wrapped = super::streaming::wrap_stream(stream, hash_content_type, vec![ns_static.into()]);
+                    pipe_stream_to_subscription(pending, wrapped).await
+                })
+            }
+        )?;
+
+        // Register {ns}.schema subscription
+        let plexus_for_schema = plexus.clone();
+        module.register_subscription(
+            schema_method,
+            schema_method,
+            schema_unsub,
+            move |params, pending, _ctx, _ext| {
+                let plexus = plexus_for_schema.clone();
+                Box::pin(async move {
+                    let p: SchemaParams = params.parse().unwrap_or_default();
+                    let plugin_schema = Activation::plugin_schema(&*plexus);
+
+                    let result = if let Some(ref name) = p.method {
+                        plugin_schema.methods.iter()
+                            .find(|m| m.name == *name)
+                            .map(|m| super::SchemaResult::Method(m.clone()))
+                            .ok_or_else(|| jsonrpsee::types::ErrorObject::owned(
+                                -32602,
+                                format!("Method '{}' not found", name),
+                                None::<()>,
+                            ))?
+                    } else {
+                        super::SchemaResult::Plugin(plugin_schema)
+                    };
+
+                    let stream = async_stream::stream! {
+                        yield result;
+                    };
+                    let wrapped = super::streaming::wrap_stream(stream, schema_content_type, vec![ns_static.into()]);
+                    pipe_stream_to_subscription(pending, wrapped).await
+                })
+            }
+        )?;
+
+        // Register pending RPC methods from activations
+        let pending = std::mem::take(&mut *plexus.inner.pending_rpc.lock().unwrap());
+        for factory in pending {
+            module.merge(factory())?;
+        }
+
+        Ok(module)
+    }
 }
 
 /// Params for {ns}.call

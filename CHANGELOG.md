@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING**: `DynamicHub::new()` now requires explicit namespace parameter
+  - Forces intentional naming instead of defaulting to "plexus"
+  - Example: `DynamicHub::new("substrate")` or `DynamicHub::new("myapp")`
+  - Rationale: DynamicHub is a composition tool - its namespace should reflect your application
+
 - **DEPRECATION**: `Plexus` type renamed to `DynamicHub` to clarify architecture
   - `Plexus` remains as a deprecated type alias for backwards compatibility
   - Will be removed in a future major version
@@ -17,7 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Migration Guide
 
-Replace `Plexus` with `DynamicHub` in your code:
+Replace `Plexus::new()` with `DynamicHub::new(namespace)`:
 
 ```rust
 // Before
@@ -26,10 +31,16 @@ let hub = Plexus::new().register(activation);
 
 // After
 use hub_core::plexus::DynamicHub;
-let hub = DynamicHub::new().register(activation);
+let hub = DynamicHub::new("myapp").register(activation);
 ```
 
+Choose a namespace that identifies your application:
+- "substrate" for substrate server
+- "hub" for generic hubs
+- "myapp" for your application name
+
 The `Plexus` type alias will continue to work but will show deprecation warnings.
+The old `with_namespace()` method is deprecated in favor of `new(namespace)`.
 
 ## [0.2.1] - Previous releases
 

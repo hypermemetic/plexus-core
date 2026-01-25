@@ -1,20 +1,39 @@
 # hub-core
 
-Core infrastructure for building hub-based systems with dynamic routing.
+Core infrastructure for building activation-based systems with optional dynamic routing.
 
 ## Overview
 
 hub-core provides the foundation for building pluggable systems with hierarchical routing and schema introspection:
 
-- **DynamicHub** - Dynamic routing hub for composing activations (formerly Plexus)
-- **Activation** - Trait for implementing plugins
+- **Activation** - Trait for implementing plugins/services
+- **DynamicHub** - Optional composition tool for hosting multiple activations (formerly Plexus)
 - **PlexusMcpBridge** - MCP server integration via rmcp
 - **Handle** - Typed references to plugin method results
 - **hub-macro** - Procedural macro for generating activation boilerplate
 
+> **Key Insight**: Any activation can be hosted directly. DynamicHub is just an activation with `.register()` - it's not required infrastructure.
+
 > **Note**: `Plexus` has been renamed to `DynamicHub` to clarify that it's an activation with dynamic registration, not special infrastructure. The `Plexus` type alias remains for backwards compatibility but is deprecated.
 
 ## Quick Start
+
+### Single Activation (Direct Hosting)
+
+For a single service or plugin, host it directly without DynamicHub:
+
+```rust
+use hub_core::activations::echo::Echo;
+use std::sync::Arc;
+
+// Single activation - no DynamicHub needed
+let echo = Arc::new(Echo::new());
+// Use with hub-transport or your own server
+```
+
+### Multiple Activations (Composition)
+
+For composing multiple activations under one namespace, use DynamicHub:
 
 ```rust
 use hub_core::plexus::DynamicHub;
@@ -25,11 +44,14 @@ use std::sync::Arc;
 let hub = Arc::new(
     DynamicHub::new("myapp")
         .register(MyActivation::new())
+        .register(AnotherActivation::new())
 );
 
 // Route calls to activations
 let stream = hub.route("myactivation.method", json!({})).await?;
 ```
+
+> **When to use DynamicHub**: Only when you need to compose multiple top-level activations. For a single service, host the activation directly.
 
 > **Migration Note**: `DynamicHub::new()` now requires an explicit namespace. Choose a namespace that identifies your application (e.g., "myapp", "substrate", "hub"). The `Plexus` type alias still works but is deprecated.
 
@@ -62,18 +84,86 @@ impl MyApp {
 
 ## MCP Bridge
 
-hub-core includes an MCP server bridge that exposes activations as MCP tools:
+hub-core includes an MCP server bridge that exposes activations as MCP tools.
+
+### Single Activation
 
 ```rust
-use hub_core::{DynamicHub, PlexusMcpBridge};
+use hub_core::{PlexusMcpBridge, activations::echo::Echo};
+use std::sync::Arc;
 
-let hub = Arc::new(DynamicHub::new().register(MyApp::new()));
-let bridge = PlexusMcpBridge::new(hub);
-
+// Bridge a single activation directly
+let echo = Arc::new(Echo::new());
+let bridge = PlexusMcpBridge::new(echo);
 // Use with rmcp server
 ```
 
-> Note: PlexusMcpBridge works with any activation, not just DynamicHub.
+### Multiple Activations (via DynamicHub)
+
+```rust
+use hub_core::{DynamicHub, PlexusMcpBridge};
+use std::sync::Arc;
+
+let hub = Arc::new(
+    DynamicHub::new("myapp")
+        .register(Echo::new())
+        .register(MyApp::new())
+);
+let bridge = PlexusMcpBridge::new(hub);
+// Use with rmcp server
+```
+
+> **Important**: PlexusMcpBridge works with **any** activation. You can bridge a single activation directly, or use DynamicHub to expose multiple activations.
+
+## Architecture Patterns
+
+### Hub Activations
+
+Any activation can route to children by implementing `ChildRouter`. This enables nested method routing without DynamicHub:
+
+- **Solar** - Routes to planets (hardcoded children)
+- **DynamicHub** - Routes to registered activations (dynamic children via `.register()`)
+- **Your custom hub** - Can route to any children you define
+
+```rust
+// Solar is a hub activation with hardcoded children
+let solar = Arc::new(Solar::new());
+// Supports: solar.mercury.info, solar.earth.luna.info
+
+// DynamicHub is a hub activation with dynamic children
+let hub = Arc::new(
+    DynamicHub::new("app")
+        .register(solar)
+        .register(echo)
+);
+// Supports: app.solar.mercury.info, app.echo.echo
+```
+
+### When to Use DynamicHub
+
+**Use DynamicHub when:**
+- You need to compose multiple top-level activations
+- You want dynamic registration (add activations at runtime)
+- You're building a multi-service application server (like substrate)
+
+**Don't use DynamicHub when:**
+- You have a single service/plugin (host it directly)
+- Your activation already routes to children (like Solar)
+- You want a simpler deployment
+
+### Direct Activation Hosting
+
+The recommended pattern for single services is direct hosting:
+
+```rust
+// Good: Direct hosting for single service
+let my_service = Arc::new(MyService::new());
+TransportServer::builder(my_service, converter).serve().await?;
+
+// Unnecessary: DynamicHub for single service
+let hub = Arc::new(DynamicHub::new("app").register(MyService::new()));
+TransportServer::builder(hub, converter).serve().await?;
+```
 
 ## Example Activations
 

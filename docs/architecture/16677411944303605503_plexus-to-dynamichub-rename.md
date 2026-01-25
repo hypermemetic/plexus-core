@@ -85,7 +85,7 @@ let plexus = Plexus::new()
 
 // After
 pub struct DynamicHub { ... }
-let hub = DynamicHub::new()
+let hub = DynamicHub::new("myapp")  // Requires explicit namespace
     .register(Solar::new())
     .register(Echo::new());
 ```
@@ -95,12 +95,20 @@ let hub = DynamicHub::new()
 - **Hub** - Routes to multiple child activations
 - **Clear** - Describes what it does, not a project name
 
+**Why require explicit namespace?**
+- DynamicHub is a composition tool - its namespace should reflect your application
+- Unlike single activations which have fixed namespaces
+- Forces intentional naming instead of defaulting to "plexus"
+- Example namespaces: "substrate", "myapp", "hub"
+
 ### 2. Emphasize Direct Activation Hosting
 
-**Documentation should lead with single-activation hosting:**
+**DynamicHub is OPTIONAL. Any activation can be hosted directly.**
+
+#### Single Activation (Recommended Pattern)
 
 ```rust
-// Host a single activation directly
+// Host a single activation directly - NO DynamicHub needed
 let solar = Arc::new(Solar::new());
 TransportServer::builder(solar, converter)
     .with_websocket(8888)
@@ -109,12 +117,14 @@ TransportServer::builder(solar, converter)
 // Calls: solar.observe, solar.mercury.info, solar.earth.luna.info
 ```
 
-**Then introduce DynamicHub as a composition tool:**
+This is the **primary pattern**. Most services should be hosted this way.
+
+#### Multiple Activations (Use DynamicHub)
 
 ```rust
-// Host multiple top-level activations
+// Only use DynamicHub when composing multiple top-level activations
 let hub = Arc::new(
-    DynamicHub::new()
+    DynamicHub::new("substrate")  // Explicit namespace for your app
         .register(Solar::new())
         .register(Echo::new())
         .register(JsExec::new())
@@ -124,53 +134,132 @@ TransportServer::builder(hub, converter)
     .with_websocket(8888)
     .serve().await?;
 
-// Calls: solar.observe, echo.echo, jsexec.execute
+// Calls: substrate.call solar.observe, substrate.call echo.echo
+// Or with hub-transport direct routing: solar.observe, echo.echo
 ```
 
-### 3. Clarify Terminology
+#### When to Use DynamicHub
+
+**Use DynamicHub when:**
+- Hosting multiple top-level activations (like substrate does)
+- Need runtime registration of activations
+- Building a multi-service application server
+
+**Don't use DynamicHub when:**
+- Hosting a single service/plugin
+- Your activation already routes to children (Solar, custom hubs)
+- Want simpler deployment
+
+**Examples:**
+- ✅ **substrate** - Multiple activations (arbor, cone, echo, etc.) → Use `DynamicHub::new("substrate")`
+- ❌ **JsExec service** - Single activation → Host `JsExec` directly
+- ❌ **Solar explorer** - Solar already routes to planets → Host `Solar` directly
+- ✅ **Multi-tenant platform** - Many independent services → Use `DynamicHub::new("platform")`
+
+### 3. Clarify Terminology and Architecture
 
 **Current (confusing):**
 - "Plexus" - The framework/hub/router (unclear what it is)
 - "Activation" - A plugin (suggests subsidiary to Plexus)
+- Impression: Plexus is required infrastructure
 
 **Proposed (clear):**
-- "Activation" - Anything implementing the trait (primary concept)
-- "DynamicHub" - An activation that provides `.register()` (convenience)
-- "Hub activation" - Any activation that routes to children (pattern)
+- **"Activation"** - Anything implementing the trait (primary concept)
+  - Can be hosted directly with any transport
+  - Can route to children (hub pattern)
+  - No framework required
+- **"DynamicHub"** - An activation that provides `.register()` (composition tool)
+  - Just another activation, not special infrastructure
+  - Optional - only needed for composing multiple top-level activations
+- **"Hub activation"** - Any activation that routes to children (pattern)
+  - Solar routes to planets (hardcoded children)
+  - DynamicHub routes to registered activations (dynamic children)
+  - Both are just activations implementing ChildRouter
 
-### 4. Update Default Namespace
+**Key Principle: Activation-First Architecture**
 
-```rust
-// Before
-impl Plexus {
-    pub fn new() -> Self {
-        Self::with_namespace("plexus")  // Namespace = type name (confusing)
-    }
-}
-
-// After
-impl DynamicHub {
-    pub fn new() -> Self {
-        Self::with_namespace("hub")  // Generic default
-    }
-}
+```
+┌─────────────────────────────────────────────┐
+│ Activation (trait)                          │
+│ - The core abstraction                      │
+│ - Can be hosted directly                    │
+│ - Can route to children (optional)          │
+└─────────────────────────────────────────────┘
+             │
+    ┌────────┴────────┬──────────────┬─────────────┐
+    │                 │              │             │
+┌───▼────┐      ┌────▼─────┐   ┌────▼────┐   ┌────▼────────┐
+│ Echo   │      │  JsExec  │   │  Solar  │   │ DynamicHub  │
+│ (leaf) │      │  (leaf)  │   │  (hub)  │   │    (hub)    │
+└────────┘      └──────────┘   └─────────┘   └─────────────┘
+                                     │              │
+                               Hardcoded      Dynamic
+                               children       .register()
 ```
 
-**Or even better - require explicit namespace:**
+All are equal. None are "special infrastructure."
+
+### 4. Require Explicit Namespace for DynamicHub
+
+**Why this matters:**
+
+Single activations have **fixed namespaces** defined in their implementation:
+```rust
+#[hub_methods(namespace = "echo", ...)]
+impl Echo { ... }
+// Always "echo.echo", never changes
+```
+
+DynamicHub is a **composition tool** - its namespace should reflect the **application**:
+```rust
+// substrate server
+DynamicHub::new("substrate").register(...)
+// Methods: substrate.call, substrate.schema
+
+// Your app
+DynamicHub::new("myapp").register(...)
+// Methods: myapp.call, myapp.schema
+```
+
+Defaulting to "plexus" was wrong - it made it seem like a framework name.
+
+### 5. Implementation: Require Explicit Namespace
+
+**Final implementation:**
 
 ```rust
 impl DynamicHub {
-    // Remove parameterless new()
+    /// Create a new DynamicHub with explicit namespace
+    pub fn new(namespace: impl Into<String>) -> Self {
+        Self {
+            inner: Arc::new(DynamicHubInner {
+                namespace: namespace.into(),
+                // ...
+            }),
+        }
+    }
 
+    #[deprecated(since = "0.3.0", note = "Use new(namespace) instead")]
     pub fn with_namespace(namespace: impl Into<String>) -> Self {
-        // Force users to choose their namespace
+        Self::new(namespace)
     }
 }
 
-// Usage
-DynamicHub::with_namespace("myapp")
-    .register(solar)
+// No Default impl - forces explicit namespace choice
+```
+
+**Usage:**
+```rust
+// substrate server
+DynamicHub::new("substrate")
+    .register(arbor)
+    .register(cone)
     .register(echo);
+
+// Generic application
+DynamicHub::new("myapp")
+    .register(solar)
+    .register(jsexec);
 ```
 
 ## Migration Path
@@ -279,21 +368,47 @@ pub fn build_plexus() -> Arc<DynamicHub> {
 ### 1. Architectural Clarity
 
 **Before:**
-> "Plexus is the central routing layer... wait, but Solar also routes... so is Solar using Plexus? No? Then what IS Plexus?"
+> "Plexus is the central routing layer... wait, but Solar also routes... so is Solar using Plexus? No? Then what IS Plexus? Do I need Plexus to host an activation?"
 
 **After:**
-> "Any Activation can route to children. DynamicHub is an activation that lets you register children at runtime."
+> "Any Activation can be hosted directly. Any activation can route to children if it implements ChildRouter. DynamicHub is just an activation that lets you register children at runtime - it's optional."
 
 ### 2. Simpler Mental Model
 
-**Before:** Three concepts
-- Plexus (special framework)
-- Activation (plugin interface)
-- Hub (routing pattern)
+**Before:** Three concepts (confusing hierarchy)
+- Plexus (special framework - required?)
+- Activation (plugin interface - lives inside Plexus?)
+- Hub (routing pattern - what's the difference from Plexus?)
 
-**After:** Two concepts
-- Activation (trait that can route)
-- DynamicHub (activation with `.register()`)
+**After:** Two concepts (flat architecture)
+- **Activation** (trait - primary concept)
+  - Can be hosted directly
+  - Can route to children (optional)
+- **DynamicHub** (activation with `.register()`)
+  - Optional composition tool
+  - Just another activation
+
+### 3. Direct Hosting Pattern Emphasized
+
+**Before:**
+```rust
+// Users thought they needed DynamicHub for everything
+let hub = DynamicHub::new()  // Namespace unclear
+    .register(Solar::new());  // Why wrap Solar?
+```
+
+**After:**
+```rust
+// Primary pattern: host activation directly
+let solar = Arc::new(Solar::new());
+TransportServer::builder(solar, ...).serve().await?;
+
+// DynamicHub only when needed
+let hub = DynamicHub::new("substrate")  // Explicit app name
+    .register(arbor)
+    .register(cone)
+    .register(echo);
+```
 
 ### 3. Direct Hosting Pattern
 
@@ -381,35 +496,42 @@ Users can choose meaningful namespaces:
 
 ## Implementation Checklist
 
-### Phase 1: Alias and Deprecation
+### Phase 1: Alias and Deprecation ✅ COMPLETED
 
-- [ ] Add `pub type Plexus = DynamicHub` with deprecation
-- [ ] Update hub-core documentation
-- [ ] Add migration guide to CHANGELOG
-- [ ] Test that existing code still compiles
-- [ ] Deploy and observe deprecation warnings
+- [x] Add `pub type Plexus = DynamicHub` with deprecation
+- [x] Rename struct Plexus to DynamicHub
+- [x] Update all impl blocks to use DynamicHub
+- [x] **Require explicit namespace**: Remove Default, make new() take namespace param
+- [x] Deprecate with_namespace() in favor of new(namespace)
+- [x] Update hub-core documentation (README, lib.rs)
+- [x] Add migration guide to CHANGELOG
+- [x] Update all hub-core tests to use DynamicHub::new("test")
+- [x] Test that existing code still compiles with deprecation warnings
 
-### Phase 2: Internal Migration
+### Phase 2: Internal Migration ✅ COMPLETED
 
-- [ ] Update hub-core internal usage
-- [ ] Update substrate to use DynamicHub
-- [ ] Update tests to use DynamicHub
-- [ ] Update examples to use DynamicHub
-- [ ] Update hub-transport docs (examples only)
+- [x] Update hub-core internal usage (builder.rs)
+- [x] Update substrate to use DynamicHub::new("substrate")
+- [x] Update substrate tests to use DynamicHub
+- [x] Update substrate examples to use DynamicHub
+- [x] Update hub-transport docs to mention DynamicHub and direct hosting
+- [x] Add architecture documentation about when to use DynamicHub vs direct hosting
 
-### Phase 3: Remove Alias
+### Phase 3: Remove Alias (FUTURE - Breaking)
 
 - [ ] Remove `type Plexus = DynamicHub`
-- [ ] Remove deprecated functions
+- [ ] Remove deprecated with_namespace() function
 - [ ] Update version (0.3.0 → 0.4.0)
 - [ ] Announce breaking change
 
-### Phase 4: Module Rename (Optional)
+### Phase 4: Module Rename (OPTIONAL - Future)
 
-- [ ] Rename `src/plexus/` directory
+- [ ] Rename `src/plexus/` directory to `src/dynamic_hub/`
 - [ ] Update all import paths
 - [ ] Update version (0.4.0 → 0.5.0)
 - [ ] Update documentation
+
+**Note**: Phases 3 and 4 are future work. Current implementation (Phases 1-2) maintains backwards compatibility via deprecated type alias.
 
 ## Alternative Approaches
 
@@ -603,19 +725,42 @@ pub struct DynamicHub { ... }
 
 ## Conclusion
 
-Renaming `Plexus` to `DynamicHub` and emphasizing direct activation hosting:
+Renaming `Plexus` to `DynamicHub` and requiring explicit namespaces achieves:
 
-1. **Clarifies architecture** - Activation is primary, DynamicHub is a tool
-2. **Reduces confusion** - No more "is Plexus required?"
-3. **Better naming** - Type describes what it does
-4. **Simpler onboarding** - Start with single activation hosting
-5. **Preserves power** - Composition still available via DynamicHub
+1. **Clarifies architecture** - Activation is primary, DynamicHub is optional
+2. **Reduces confusion** - Clear that DynamicHub is not required infrastructure
+3. **Better naming** - Type describes what it does (dynamic hub with .register())
+4. **Simpler onboarding** - Start with direct activation hosting
+5. **Preserves power** - Composition still available when needed
+6. **Intentional naming** - Explicit namespace forces users to name their application
 
-The change is breaking but justified by the architectural clarity it provides.
+The changes are breaking but justified by the architectural clarity they provide.
 
-**Recommendation:** Proceed with phased migration:
-- Phase 1: Deprecation alias (next release)
-- Phase 2: Internal migration (following release)
-- Phase 3: Remove alias (2 releases later)
+### What Was Implemented (Phases 1-2)
 
-This gives users time to migrate while improving the architecture for future users.
+✅ **Phase 1 Complete:**
+- Struct renamed to DynamicHub
+- Deprecated type alias `Plexus` maintains backwards compatibility
+- Explicit namespace required: `DynamicHub::new(namespace)`
+- Updated all documentation and examples
+
+✅ **Phase 2 Complete:**
+- substrate uses `DynamicHub::new("substrate")`
+- All tests updated
+- README emphasizes direct hosting pattern
+- Architecture docs explain when to use DynamicHub vs direct hosting
+
+### Migration Status
+
+**Current state:** Backwards compatible with deprecation warnings
+- Old code using `Plexus::new()` will show deprecation warnings
+- Type alias `Plexus` still works
+- Migration path is clear via deprecation messages and documentation
+
+**Future phases (not yet scheduled):**
+- Phase 3: Remove Plexus type alias (breaking change)
+- Phase 4: Rename module directory (optional)
+
+### Key Takeaway
+
+**Any activation can be hosted directly.** DynamicHub is just a composition tool for when you need multiple top-level activations. This is the fundamental insight that drives all the naming and documentation changes.

@@ -386,43 +386,71 @@ impl PluginRegistry {
 }
 
 // ============================================================================
-// Plexus
+// DynamicHub (formerly Plexus)
 // ============================================================================
 
-struct PlexusInner {
-    /// Custom namespace for this plexus instance (defaults to "plexus")
+struct DynamicHubInner {
+    /// Custom namespace for this hub instance (defaults to "plexus")
     namespace: String,
     activations: HashMap<String, Arc<dyn ActivationObject>>,
-    /// Child routers for direct nested routing (e.g., plexus.solar.mercury.info)
+    /// Child routers for direct nested routing (e.g., hub.solar.mercury.info)
     child_routers: HashMap<String, Arc<dyn ChildRouter>>,
     /// Plugin registry mapping UUIDs to paths
     registry: std::sync::RwLock<PluginRegistry>,
     pending_rpc: std::sync::Mutex<Vec<Box<dyn FnOnce() -> Methods + Send>>>,
 }
 
-/// Plexus - the central hub that IS an activation and routes to other activations
+/// DynamicHub - an activation that routes to dynamically registered child activations
+///
+/// Unlike hub activations with hardcoded children (like Solar),
+/// DynamicHub allows registering activations at runtime via `.register()`.
+///
+/// # Direct Hosting
+///
+/// For a single activation, host it directly:
+/// ```ignore
+/// let solar = Arc::new(Solar::new());
+/// TransportServer::builder(solar, converter).serve().await?;
+/// ```
+///
+/// # Composition
+///
+/// For multiple top-level activations, use DynamicHub:
+/// ```ignore
+/// let hub = DynamicHub::with_namespace("myapp")
+///     .register(Solar::new())
+///     .register(Echo::new());
+/// ```
 #[derive(Clone)]
-pub struct Plexus {
-    inner: Arc<PlexusInner>,
+pub struct DynamicHub {
+    inner: Arc<DynamicHubInner>,
 }
 
-impl Default for Plexus {
+/// Deprecated: Use DynamicHub instead
+///
+/// Plexus has been renamed to DynamicHub to clarify that it's just an activation
+/// with dynamic registration, not special infrastructure. Any activation can be
+/// a hub - Solar routes to planets, DynamicHub routes to registered activations.
+#[deprecated(since = "0.3.0", note = "Use DynamicHub instead")]
+pub type Plexus = DynamicHub;
+
+impl Default for DynamicHub {
     fn default() -> Self { Self::new() }
 }
 
 // ============================================================================
-// Plexus Infrastructure (non-RPC methods)
+// DynamicHub Infrastructure (non-RPC methods)
 // ============================================================================
 
-impl Plexus {
+impl DynamicHub {
     pub fn new() -> Self {
         Self::with_namespace("plexus")
     }
 
-    /// Create a new Plexus with a custom namespace
+    /// Create a new DynamicHub with a custom namespace
     pub fn with_namespace(namespace: impl Into<String>) -> Self {
         Self {
-            inner: Arc::new(PlexusInner {
+            inner: Arc::new(DynamicHubInner {
                 namespace: namespace.into(),
                 activations: HashMap::new(),
                 child_routers: HashMap::new(),
@@ -432,7 +460,7 @@ impl Plexus {
         }
     }
 
-    /// Get the runtime namespace for this Plexus instance
+    /// Get the runtime namespace for this DynamicHub instance
     pub fn runtime_namespace(&self) -> &str {
         &self.inner.namespace
     }
@@ -449,7 +477,7 @@ impl Plexus {
         let activation_for_rpc = activation.clone();
 
         let inner = Arc::get_mut(&mut self.inner)
-            .expect("Cannot register: Plexus has multiple references");
+            .expect("Cannot register: DynamicHub has multiple references");
 
         // Register in the plugin registry
         inner.registry.write().unwrap().register(
@@ -467,7 +495,7 @@ impl Plexus {
     /// Register a hub activation that supports nested routing
     ///
     /// Hub activations implement `ChildRouter`, enabling direct nested method calls
-    /// like `plexus.solar.mercury.info` at the RPC layer (no plexus.call indirection).
+    /// like `hub.solar.mercury.info` at the RPC layer (no hub.call indirection).
     pub fn register_hub<A: Activation + ChildRouter + Clone + 'static>(mut self, activation: A) -> Self {
         let namespace = activation.namespace().to_string();
         let plugin_id = activation.plugin_id();
@@ -475,7 +503,7 @@ impl Plexus {
         let activation_for_router = activation.clone();
 
         let inner = Arc::get_mut(&mut self.inner)
-            .expect("Cannot register: Plexus has multiple references");
+            .expect("Cannot register: DynamicHub has multiple references");
 
         // Register in the plugin registry
         inner.registry.write().unwrap().register(
@@ -495,7 +523,7 @@ impl Plexus {
     pub fn list_methods(&self) -> Vec<String> {
         let mut methods = Vec::new();
 
-        // Include plexus's own methods
+        // Include hub's own methods
         for m in Activation::methods(self) {
             methods.push(format!("{}.{}", self.inner.namespace, m));
         }
@@ -510,11 +538,11 @@ impl Plexus {
         methods
     }
 
-    /// List all activations (including plexus itself)
+    /// List all activations (including this hub itself)
     pub fn list_activations_info(&self) -> Vec<ActivationInfo> {
         let mut activations = Vec::new();
 
-        // Include plexus itself
+        // Include this hub itself
         activations.push(ActivationInfo {
             namespace: Activation::namespace(self).to_string(),
             version: Activation::version(self).to_string(),
@@ -596,11 +624,11 @@ impl Plexus {
         self.inner.registry.read().unwrap().lookup_by_path(path)
     }
 
-    /// Get plugin schemas for all activations (including plexus itself)
+    /// Get plugin schemas for all activations (including this hub itself)
     pub fn list_plugin_schemas(&self) -> Vec<PluginSchema> {
         let mut schemas = Vec::new();
 
-        // Include plexus itself
+        // Include this hub itself
         schemas.push(Activation::plugin_schema(self));
 
         // Include registered activations
@@ -653,7 +681,7 @@ impl Plexus {
 
         PlexusContext::init(self.compute_hash());
 
-        // Register plexus methods with runtime namespace using dot notation (e.g., "plexus.call")
+        // Register hub methods with runtime namespace using dot notation (e.g., "plexus.call" or "hub.call")
         // Note: we leak these strings to get 'static lifetime required by jsonrpsee
         let ns = self.runtime_namespace();
         let call_method: &'static str = Box::leak(format!("{}.call", ns).into_boxed_str());
@@ -744,19 +772,19 @@ impl Plexus {
         Ok(module)
     }
 
-    /// Convert Arc<Plexus> to RPC module while keeping the Arc alive
+    /// Convert Arc<DynamicHub> to RPC module while keeping the Arc alive
     ///
-    /// Unlike `into_rpc_module`, this keeps the Arc<Plexus> reference alive,
-    /// which is necessary when activations hold Weak<Plexus> references that
+    /// Unlike `into_rpc_module`, this keeps the Arc<DynamicHub> reference alive,
+    /// which is necessary when activations hold Weak<DynamicHub> references that
     /// need to remain upgradeable.
-    pub fn arc_into_rpc_module(plexus: Arc<Self>) -> Result<RpcModule<()>, jsonrpsee::core::RegisterMethodError> {
+    pub fn arc_into_rpc_module(hub: Arc<Self>) -> Result<RpcModule<()>, jsonrpsee::core::RegisterMethodError> {
         let mut module = RpcModule::new(());
 
-        PlexusContext::init(plexus.compute_hash());
+        PlexusContext::init(hub.compute_hash());
 
-        // Register plexus methods with runtime namespace using dot notation (e.g., "plexus.call")
+        // Register hub methods with runtime namespace using dot notation (e.g., "plexus.call" or "hub.call")
         // Note: we leak these strings to get 'static lifetime required by jsonrpsee
-        let ns = plexus.runtime_namespace();
+        let ns = hub.runtime_namespace();
         let call_method: &'static str = Box::leak(format!("{}.call", ns).into_boxed_str());
         let call_unsub: &'static str = Box::leak(format!("{}.call_unsub", ns).into_boxed_str());
         let hash_method: &'static str = Box::leak(format!("{}.hash", ns).into_boxed_str());
@@ -768,16 +796,16 @@ impl Plexus {
         let ns_static: &'static str = Box::leak(ns.to_string().into_boxed_str());
 
         // Register {ns}.call subscription - clone Arc to keep reference alive
-        let plexus_for_call = plexus.clone();
+        let hub_for_call = hub.clone();
         module.register_subscription(
             call_method,
             call_method,
             call_unsub,
             move |params, pending, _ctx, _ext| {
-                let plexus = plexus_for_call.clone();
+                let hub = hub_for_call.clone();
                 Box::pin(async move {
                     let p: CallParams = params.parse()?;
-                    let stream = plexus.route(&p.method, p.params.unwrap_or_default()).await
+                    let stream = hub.route(&p.method, p.params.unwrap_or_default()).await
                         .map_err(|e| jsonrpsee::types::ErrorObject::owned(-32000, e.to_string(), None::<()>))?;
                     pipe_stream_to_subscription(pending, stream).await
                 })
@@ -785,15 +813,15 @@ impl Plexus {
         )?;
 
         // Register {ns}.hash subscription
-        let plexus_for_hash = plexus.clone();
+        let hub_for_hash = hub.clone();
         module.register_subscription(
             hash_method,
             hash_method,
             hash_unsub,
             move |_params, pending, _ctx, _ext| {
-                let plexus = plexus_for_hash.clone();
+                let hub = hub_for_hash.clone();
                 Box::pin(async move {
-                    let schema = Activation::plugin_schema(&*plexus);
+                    let schema = Activation::plugin_schema(&*hub);
                     let stream = async_stream::stream! {
                         yield HashEvent::Hash { value: schema.hash };
                     };
@@ -804,16 +832,16 @@ impl Plexus {
         )?;
 
         // Register {ns}.schema subscription
-        let plexus_for_schema = plexus.clone();
+        let hub_for_schema = hub.clone();
         module.register_subscription(
             schema_method,
             schema_method,
             schema_unsub,
             move |params, pending, _ctx, _ext| {
-                let plexus = plexus_for_schema.clone();
+                let hub = hub_for_schema.clone();
                 Box::pin(async move {
                     let p: SchemaParams = params.parse().unwrap_or_default();
-                    let plugin_schema = Activation::plugin_schema(&*plexus);
+                    let plugin_schema = Activation::plugin_schema(&*hub);
 
                     let result = if let Some(ref name) = p.method {
                         plugin_schema.methods.iter()
@@ -838,7 +866,7 @@ impl Plexus {
         )?;
 
         // Register pending RPC methods from activations
-        let pending = std::mem::take(&mut *plexus.inner.pending_rpc.lock().unwrap());
+        let pending = std::mem::take(&mut *hub.inner.pending_rpc.lock().unwrap());
         for factory in pending {
             module.merge(factory())?;
         }
@@ -878,7 +906,7 @@ async fn pipe_stream_to_subscription(
 }
 
 // ============================================================================
-// Plexus RPC Methods (via hub-macro)
+// DynamicHub RPC Methods (via hub-macro)
 // ============================================================================
 
 #[hub_macro::hub_methods(
@@ -888,7 +916,7 @@ async fn pipe_stream_to_subscription(
     hub,
     namespace_fn = "runtime_namespace"
 )]
-impl Plexus {
+impl DynamicHub {
     /// Route a call to a registered activation
     #[hub_macro::hub_method(
         streaming,
@@ -945,31 +973,31 @@ impl Plexus {
 }
 
 // ============================================================================
-// HubContext Implementation for Weak<Plexus>
+// HubContext Implementation for Weak<DynamicHub>
 // ============================================================================
 
 use super::hub_context::HubContext;
 use std::sync::Weak;
 
-/// HubContext implementation for Weak<Plexus>
+/// HubContext implementation for Weak<DynamicHub>
 ///
-/// This enables plugins to receive a weak reference to their parent Plexus,
+/// This enables plugins to receive a weak reference to their parent DynamicHub,
 /// allowing them to resolve handles and route calls through the hub without
 /// creating reference cycles.
 #[async_trait]
-impl HubContext for Weak<Plexus> {
+impl HubContext for Weak<DynamicHub> {
     async fn resolve_handle(&self, handle: &Handle) -> Result<PlexusStream, PlexusError> {
-        let plexus = self.upgrade().ok_or_else(|| {
+        let hub = self.upgrade().ok_or_else(|| {
             PlexusError::ExecutionError("Parent hub has been dropped".to_string())
         })?;
-        plexus.do_resolve_handle(handle).await
+        hub.do_resolve_handle(handle).await
     }
 
     async fn call(&self, method: &str, params: serde_json::Value) -> Result<PlexusStream, PlexusError> {
-        let plexus = self.upgrade().ok_or_else(|| {
+        let hub = self.upgrade().ok_or_else(|| {
             PlexusError::ExecutionError("Parent hub has been dropped".to_string())
         })?;
-        plexus.route(method, params).await
+        hub.route(method, params).await
     }
 
     fn is_valid(&self) -> bool {
@@ -977,18 +1005,18 @@ impl HubContext for Weak<Plexus> {
     }
 }
 
-/// ChildRouter implementation for Plexus
+/// ChildRouter implementation for DynamicHub
 ///
 /// This enables nested routing through registered activations.
-/// e.g., plexus.call("solar.mercury.info") routes to solar → mercury → info
+/// e.g., hub.call("solar.mercury.info") routes to solar → mercury → info
 #[async_trait]
-impl ChildRouter for Plexus {
+impl ChildRouter for DynamicHub {
     fn router_namespace(&self) -> &str {
         &self.inner.namespace
     }
 
     async fn router_call(&self, method: &str, params: Value) -> Result<PlexusStream, PlexusError> {
-        // Plexus routes via its registered activations
+        // DynamicHub routes via its registered activations
         // Method format: "activation.method" or "activation.child.method"
         self.route(method, params).await
     }
@@ -1008,15 +1036,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn plexus_implements_activation() {
+    fn dynamic_hub_implements_activation() {
         fn assert_activation<T: Activation>() {}
-        assert_activation::<Plexus>();
+        assert_activation::<DynamicHub>();
     }
 
     #[test]
-    fn plexus_methods() {
-        let plexus = Plexus::new();
-        let methods = plexus.methods();
+    fn dynamic_hub_methods() {
+        let hub = DynamicHub::new();
+        let methods = hub.methods();
         assert!(methods.contains(&"call"));
         assert!(methods.contains(&"hash"));
         assert!(methods.contains(&"schema"));
@@ -1024,25 +1052,25 @@ mod tests {
     }
 
     #[test]
-    fn plexus_hash_stable() {
-        let p1 = Plexus::new();
-        let p2 = Plexus::new();
-        assert_eq!(p1.compute_hash(), p2.compute_hash());
+    fn dynamic_hub_hash_stable() {
+        let h1 = DynamicHub::new();
+        let h2 = DynamicHub::new();
+        assert_eq!(h1.compute_hash(), h2.compute_hash());
     }
 
     #[test]
-    fn plexus_is_hub() {
+    fn dynamic_hub_is_hub() {
         use crate::activations::health::Health;
-        let plexus = Plexus::new().register(Health::new());
-        let schema = plexus.plugin_schema();
+        let hub = DynamicHub::new().register(Health::new());
+        let schema = hub.plugin_schema();
 
-        // Plexus should be a hub (has children)
-        assert!(schema.is_hub(), "plexus should be a hub");
-        assert!(!schema.is_leaf(), "plexus should not be a leaf");
+        // DynamicHub should be a hub (has children)
+        assert!(schema.is_hub(), "dynamic hub should be a hub");
+        assert!(!schema.is_leaf(), "dynamic hub should not be a leaf");
 
         // Should have children (as summaries)
-        let children = schema.children.expect("plexus should have children");
-        assert!(!children.is_empty(), "plexus should have at least one child");
+        let children = schema.children.expect("dynamic hub should have children");
+        assert!(!children.is_empty(), "dynamic hub should have at least one child");
 
         // Health should be in the children summaries
         let health = children.iter().find(|c| c.namespace == "health").expect("should have health child");
@@ -1050,14 +1078,14 @@ mod tests {
     }
 
     #[test]
-    fn plexus_schema_structure() {
+    fn dynamic_hub_schema_structure() {
         use crate::activations::health::Health;
-        let plexus = Plexus::new().register(Health::new());
-        let schema = plexus.plugin_schema();
+        let hub = DynamicHub::new().register(Health::new());
+        let schema = hub.plugin_schema();
 
         // Pretty print the schema
         let json = serde_json::to_string_pretty(&schema).unwrap();
-        println!("Plexus schema:\n{}", json);
+        println!("DynamicHub schema:\n{}", json);
 
         // Verify structure
         assert_eq!(schema.namespace, "plexus");
@@ -1075,13 +1103,13 @@ mod tests {
         use crate::types::Handle;
         use uuid::Uuid;
 
-        let plexus = Plexus::new().register(Health::new());
+        let hub = DynamicHub::new().register(Health::new());
 
         // Handle for an unregistered plugin (random UUID)
         let unknown_plugin_id = Uuid::new_v4();
         let handle = Handle::new(unknown_plugin_id, "1.0.0", "some_method");
 
-        let result = plexus.do_resolve_handle(&handle).await;
+        let result = hub.do_resolve_handle(&handle).await;
 
         match result {
             Err(PlexusError::ActivationNotFound(_)) => {
@@ -1097,12 +1125,12 @@ mod tests {
         use crate::activations::health::Health;
         use crate::types::Handle;
 
-        let plexus = Plexus::new().register(Health::new());
+        let hub = DynamicHub::new().register(Health::new());
 
         // Handle for health plugin (which doesn't support handle resolution)
         let handle = Handle::new(Health::PLUGIN_ID, "1.0.0", "check");
 
-        let result = plexus.do_resolve_handle(&handle).await;
+        let result = hub.do_resolve_handle(&handle).await;
 
         match result {
             Err(PlexusError::HandleNotSupported(name)) => {
@@ -1125,13 +1153,13 @@ mod tests {
         let health_plugin_id = health.plugin_id();
         let echo_plugin_id = echo.plugin_id();
 
-        let plexus = Plexus::new()
+        let hub = DynamicHub::new()
             .register(health)
             .register(echo);
 
         // Health handle → health plugin
         let health_handle = Handle::new(health_plugin_id, "1.0.0", "check");
-        match plexus.do_resolve_handle(&health_handle).await {
+        match hub.do_resolve_handle(&health_handle).await {
             Err(PlexusError::HandleNotSupported(name)) => assert_eq!(name, "health"),
             Err(other) => panic!("health handle should route to health plugin, got {:?}", other),
             Ok(_) => panic!("health handle should return HandleNotSupported"),
@@ -1139,7 +1167,7 @@ mod tests {
 
         // Echo handle → echo plugin
         let echo_handle = Handle::new(echo_plugin_id, "1.0.0", "echo");
-        match plexus.do_resolve_handle(&echo_handle).await {
+        match hub.do_resolve_handle(&echo_handle).await {
             Err(PlexusError::HandleNotSupported(name)) => assert_eq!(name, "echo"),
             Err(other) => panic!("echo handle should route to echo plugin, got {:?}", other),
             Ok(_) => panic!("echo handle should return HandleNotSupported"),
@@ -1147,7 +1175,7 @@ mod tests {
 
         // Unknown handle → ActivationNotFound (random UUID not registered)
         let unknown_handle = Handle::new(Uuid::new_v4(), "1.0.0", "method");
-        match plexus.do_resolve_handle(&unknown_handle).await {
+        match hub.do_resolve_handle(&unknown_handle).await {
             Err(PlexusError::ActivationNotFound(_)) => { /* expected */ },
             Err(other) => panic!("unknown handle should return ActivationNotFound, got {:?}", other),
             Ok(_) => panic!("unknown handle should return ActivationNotFound"),
@@ -1201,9 +1229,9 @@ mod tests {
     fn plugin_registry_populated_on_register() {
         use crate::activations::health::Health;
 
-        let plexus = Plexus::new().register(Health::new());
+        let hub = DynamicHub::new().register(Health::new());
 
-        let registry = plexus.registry();
+        let registry = hub.registry();
         assert!(!registry.is_empty(), "registry should not be empty after registration");
 
         // Health plugin should be registered

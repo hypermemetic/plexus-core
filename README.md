@@ -1,33 +1,37 @@
 # hub-core
 
-Core infrastructure for building hub-based systems with Plexus routing.
+Core infrastructure for building hub-based systems with dynamic routing.
 
 ## Overview
 
 hub-core provides the foundation for building pluggable systems with hierarchical routing and schema introspection:
 
-- **Plexus** - Central routing and method dispatch
+- **DynamicHub** - Dynamic routing hub for composing activations (formerly Plexus)
 - **Activation** - Trait for implementing plugins
 - **PlexusMcpBridge** - MCP server integration via rmcp
 - **Handle** - Typed references to plugin method results
 - **hub-macro** - Procedural macro for generating activation boilerplate
 
+> **Note**: `Plexus` has been renamed to `DynamicHub` to clarify that it's an activation with dynamic registration, not special infrastructure. The `Plexus` type alias remains for backwards compatibility but is deprecated.
+
 ## Quick Start
 
 ```rust
-use hub_core::plexus::Plexus;
+use hub_core::plexus::DynamicHub;
 use hub_core::{Activation, PlexusError};
 use std::sync::Arc;
 
-// Create a plexus and register your activations
-let plexus = Arc::new(
-    Plexus::new()
+// Create a dynamic hub and register your activations
+let hub = Arc::new(
+    DynamicHub::new()
         .register(MyActivation::new())
 );
 
 // Route calls to activations
-let stream = plexus.route("myactivation.method", json!({})).await?;
+let stream = hub.route("myactivation.method", json!({})).await?;
 ```
+
+> **Migration Note**: Replace `Plexus` with `DynamicHub` in your code. The `Plexus` type alias still works but is deprecated.
 
 ## Creating Activations
 
@@ -58,16 +62,18 @@ impl MyApp {
 
 ## MCP Bridge
 
-hub-core includes an MCP server bridge that exposes Plexus activations as MCP tools:
+hub-core includes an MCP server bridge that exposes activations as MCP tools:
 
 ```rust
-use hub_core::{Plexus, PlexusMcpBridge};
+use hub_core::{DynamicHub, PlexusMcpBridge};
 
-let plexus = Arc::new(Plexus::new().register(MyApp::new()));
-let bridge = PlexusMcpBridge::new(plexus);
+let hub = Arc::new(DynamicHub::new().register(MyApp::new()));
+let bridge = PlexusMcpBridge::new(hub);
 
 // Use with rmcp server
 ```
+
+> Note: PlexusMcpBridge works with any activation, not just DynamicHub.
 
 ## Example Activations
 

@@ -8,6 +8,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use super::error_codes::{ErrorCategory, ErrorCode};
+
 /// Metadata applied by the caller when wrapping activation responses
 ///
 /// This metadata is added at each layer of the call stack, enabling
@@ -33,6 +35,102 @@ impl StreamMetadata {
             plexus_hash,
             timestamp: chrono::Utc::now().timestamp(),
         }
+    }
+}
+
+/// Structured error details for enhanced error reporting
+///
+/// This provides additional context beyond the error message,
+/// enabling better error handling on the client side.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ErrorDetails {
+    /// High-level error category for programmatic handling
+    pub category: ErrorCategory,
+
+    /// Field/parameter that caused the error
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub field: Option<String>,
+
+    /// Expected value or constraint description
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expected: Option<String>,
+
+    /// Actual value received (sanitized to avoid leaking sensitive data)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub actual: Option<Value>,
+
+    /// Human-readable suggestion for how to fix the error
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub suggestion: Option<String>,
+
+    /// Link to relevant documentation
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub docs_url: Option<String>,
+
+    /// Additional debugging context
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context: Option<Value>,
+
+    /// Related commands or resources that might help
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub related: Option<Vec<String>>,
+}
+
+impl ErrorDetails {
+    /// Create error details with just a category
+    pub fn new(category: ErrorCategory) -> Self {
+        Self {
+            category,
+            field: None,
+            expected: None,
+            actual: None,
+            suggestion: None,
+            docs_url: None,
+            context: None,
+            related: None,
+        }
+    }
+
+    /// Builder: Set the field that caused the error
+    pub fn with_field(mut self, field: impl Into<String>) -> Self {
+        self.field = Some(field.into());
+        self
+    }
+
+    /// Builder: Set the expected value
+    pub fn with_expected(mut self, expected: impl Into<String>) -> Self {
+        self.expected = Some(expected.into());
+        self
+    }
+
+    /// Builder: Set the actual value received
+    pub fn with_actual(mut self, actual: Value) -> Self {
+        self.actual = Some(actual);
+        self
+    }
+
+    /// Builder: Set a suggestion for fixing the error
+    pub fn with_suggestion(mut self, suggestion: impl Into<String>) -> Self {
+        self.suggestion = Some(suggestion.into());
+        self
+    }
+
+    /// Builder: Set documentation URL
+    pub fn with_docs_url(mut self, docs_url: impl Into<String>) -> Self {
+        self.docs_url = Some(docs_url.into());
+        self
+    }
+
+    /// Builder: Set additional context
+    pub fn with_context(mut self, context: Value) -> Self {
+        self.context = Some(context);
+        self
+    }
+
+    /// Builder: Set related commands/resources
+    pub fn with_related(mut self, related: Vec<String>) -> Self {
+        self.related = Some(related);
+        self
     }
 }
 
@@ -70,11 +168,14 @@ pub enum PlexusStreamItem {
         metadata: StreamMetadata,
         /// Human-readable error message
         message: String,
-        /// Optional error code for programmatic handling
+        /// Structured error code for programmatic handling
         #[serde(skip_serializing_if = "Option::is_none")]
-        code: Option<String>,
+        code: Option<ErrorCode>,
         /// Whether the operation can be retried
         recoverable: bool,
+        /// Structured error details (optional, for enhanced error reporting)
+        #[serde(skip_serializing_if = "Option::is_none")]
+        details: Option<ErrorDetails>,
     },
 
     /// Stream completed successfully
@@ -107,7 +208,7 @@ impl PlexusStreamItem {
     pub fn error(
         metadata: StreamMetadata,
         message: String,
-        code: Option<String>,
+        code: Option<ErrorCode>,
         recoverable: bool,
     ) -> Self {
         Self::Error {
@@ -115,6 +216,24 @@ impl PlexusStreamItem {
             message,
             code,
             recoverable,
+            details: None,
+        }
+    }
+
+    /// Create an Error item with structured details
+    pub fn error_with_details(
+        metadata: StreamMetadata,
+        message: String,
+        code: ErrorCode,
+        details: ErrorDetails,
+    ) -> Self {
+        let recoverable = code.is_recoverable();
+        Self::Error {
+            metadata,
+            message,
+            code: Some(code),
+            recoverable,
+            details: Some(details),
         }
     }
 
@@ -166,14 +285,14 @@ mod tests {
         let item = PlexusStreamItem::error(
             metadata,
             "Something went wrong".into(),
-            Some("E001".into()),
+            Some(ErrorCode::InternalError),
             false,
         );
 
         let json = serde_json::to_string(&item).unwrap();
         assert!(json.contains("\"type\":\"error\""));
         assert!(json.contains("\"message\":\"Something went wrong\""));
-        assert!(json.contains("\"code\":\"E001\""));
+        assert!(json.contains("\"code\":\"INTERNAL_ERROR\""));
         assert!(json.contains("\"recoverable\":false"));
     }
 

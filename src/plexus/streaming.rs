@@ -9,7 +9,8 @@ use serde::Serialize;
 use std::pin::Pin;
 
 use super::context::PlexusContext;
-use super::types::{PlexusStreamItem, StreamMetadata};
+use super::error_codes::ErrorCode;
+use super::types::{ErrorDetails, PlexusStreamItem, StreamMetadata};
 
 /// Type alias for boxed stream of PlexusStreamItem
 pub type PlexusStream = Pin<Box<dyn Stream<Item = PlexusStreamItem> + Send>>;
@@ -67,16 +68,17 @@ pub fn error_stream(
             message,
             code: None,
             recoverable,
+            details: None,
         }
     }))
 }
 
-/// Create an error stream with error code
+/// Create an error stream with structured error code
 ///
-/// Returns a single-item stream containing an error event with a code.
+/// Returns a single-item stream containing an error event with a structured code.
 pub fn error_stream_with_code(
     message: String,
-    code: String,
+    code: ErrorCode,
     provenance: Vec<String>,
     recoverable: bool,
 ) -> PlexusStream {
@@ -88,6 +90,30 @@ pub fn error_stream_with_code(
             message,
             code: Some(code),
             recoverable,
+            details: None,
+        }
+    }))
+}
+
+/// Create an error stream with full structured details
+///
+/// Returns a single-item stream containing an error event with structured details.
+pub fn error_stream_with_details(
+    message: String,
+    code: ErrorCode,
+    details: ErrorDetails,
+    provenance: Vec<String>,
+) -> PlexusStream {
+    let metadata = StreamMetadata::new(provenance, PlexusContext::hash());
+    let recoverable = code.is_recoverable();
+
+    Box::pin(stream::once(async move {
+        PlexusStreamItem::Error {
+            metadata,
+            message,
+            code: Some(code),
+            recoverable,
+            details: Some(details),
         }
     }))
 }
@@ -188,9 +214,9 @@ mod tests {
     async fn test_error_stream_with_code() {
         let stream = error_stream_with_code(
             "Not found".into(),
-            "NOT_FOUND".into(),
+            ErrorCode::NotFound,
             vec!["test".into()],
-            true,
+            false,
         );
         let items: Vec<_> = stream.collect().await;
 
@@ -203,8 +229,8 @@ mod tests {
                 ..
             } => {
                 assert_eq!(message, "Not found");
-                assert_eq!(code.as_deref(), Some("NOT_FOUND"));
-                assert!(recoverable);
+                assert_eq!(*code, Some(ErrorCode::NotFound));
+                assert!(!recoverable);
             }
             _ => panic!("Expected Error item"),
         }

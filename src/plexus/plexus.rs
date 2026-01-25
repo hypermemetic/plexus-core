@@ -959,6 +959,7 @@ impl DynamicHub {
                         message: e.to_string(),
                         code: None,
                         recoverable: false,
+                        details: None,
                     }
                 }))
             }

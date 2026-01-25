@@ -21,9 +21,9 @@ use hub_core::plexus::DynamicHub;
 use hub_core::{Activation, PlexusError};
 use std::sync::Arc;
 
-// Create a dynamic hub and register your activations
+// Create a dynamic hub with explicit namespace and register your activations
 let hub = Arc::new(
-    DynamicHub::new()
+    DynamicHub::new("myapp")
         .register(MyActivation::new())
 );
 
@@ -31,7 +31,7 @@ let hub = Arc::new(
 let stream = hub.route("myactivation.method", json!({})).await?;
 ```
 
-> **Migration Note**: Replace `Plexus` with `DynamicHub` in your code. The `Plexus` type alias still works but is deprecated.
+> **Migration Note**: `DynamicHub::new()` now requires an explicit namespace. Choose a namespace that identifies your application (e.g., "myapp", "substrate", "hub"). The `Plexus` type alias still works but is deprecated.
 
 ## Creating Activations
 

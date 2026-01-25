@@ -434,21 +434,21 @@ pub struct DynamicHub {
 #[deprecated(since = "0.3.0", note = "Use DynamicHub instead")]
 pub type Plexus = DynamicHub;
 
-impl Default for DynamicHub {
-    fn default() -> Self { Self::new() }
-}
-
 // ============================================================================
 // DynamicHub Infrastructure (non-RPC methods)
 // ============================================================================
 
 impl DynamicHub {
-    pub fn new() -> Self {
-        Self::with_namespace("plexus")
-    }
-
-    /// Create a new DynamicHub with a custom namespace
-    pub fn with_namespace(namespace: impl Into<String>) -> Self {
+    /// Create a new DynamicHub with explicit namespace
+    ///
+    /// Unlike single activations which have fixed namespaces, DynamicHub is a
+    /// composition tool that can be named based on your application. Common choices:
+    /// - "hub" - generic default
+    /// - "substrate" - for substrate server
+    /// - "myapp" - for your application name
+    ///
+    /// The namespace appears in method calls: `{namespace}.call`, `{namespace}.schema`
+    pub fn new(namespace: impl Into<String>) -> Self {
         Self {
             inner: Arc::new(DynamicHubInner {
                 namespace: namespace.into(),
@@ -458,6 +458,12 @@ impl DynamicHub {
                 pending_rpc: std::sync::Mutex::new(Vec::new()),
             }),
         }
+    }
+
+    /// Deprecated: Use new() with explicit namespace instead
+    #[deprecated(since = "0.3.0", note = "Use DynamicHub::new(namespace) instead")]
+    pub fn with_namespace(namespace: impl Into<String>) -> Self {
+        Self::new(namespace)
     }
 
     /// Get the runtime namespace for this DynamicHub instance
@@ -1043,7 +1049,7 @@ mod tests {
 
     #[test]
     fn dynamic_hub_methods() {
-        let hub = DynamicHub::new();
+        let hub = DynamicHub::new("test");
         let methods = hub.methods();
         assert!(methods.contains(&"call"));
         assert!(methods.contains(&"hash"));
@@ -1053,15 +1059,15 @@ mod tests {
 
     #[test]
     fn dynamic_hub_hash_stable() {
-        let h1 = DynamicHub::new();
-        let h2 = DynamicHub::new();
+        let h1 = DynamicHub::new("test");
+        let h2 = DynamicHub::new("test");
         assert_eq!(h1.compute_hash(), h2.compute_hash());
     }
 
     #[test]
     fn dynamic_hub_is_hub() {
         use crate::activations::health::Health;
-        let hub = DynamicHub::new().register(Health::new());
+        let hub = DynamicHub::new("test").register(Health::new());
         let schema = hub.plugin_schema();
 
         // DynamicHub should be a hub (has children)
@@ -1080,7 +1086,7 @@ mod tests {
     #[test]
     fn dynamic_hub_schema_structure() {
         use crate::activations::health::Health;
-        let hub = DynamicHub::new().register(Health::new());
+        let hub = DynamicHub::new("test").register(Health::new());
         let schema = hub.plugin_schema();
 
         // Pretty print the schema
@@ -1088,7 +1094,7 @@ mod tests {
         println!("DynamicHub schema:\n{}", json);
 
         // Verify structure
-        assert_eq!(schema.namespace, "plexus");
+        assert_eq!(schema.namespace, "test");
         assert!(schema.methods.iter().any(|m| m.name == "call"));
         assert!(schema.children.is_some());
     }
@@ -1103,7 +1109,7 @@ mod tests {
         use crate::types::Handle;
         use uuid::Uuid;
 
-        let hub = DynamicHub::new().register(Health::new());
+        let hub = DynamicHub::new("test").register(Health::new());
 
         // Handle for an unregistered plugin (random UUID)
         let unknown_plugin_id = Uuid::new_v4();
@@ -1125,7 +1131,7 @@ mod tests {
         use crate::activations::health::Health;
         use crate::types::Handle;
 
-        let hub = DynamicHub::new().register(Health::new());
+        let hub = DynamicHub::new("test").register(Health::new());
 
         // Handle for health plugin (which doesn't support handle resolution)
         let handle = Handle::new(Health::PLUGIN_ID, "1.0.0", "check");
@@ -1153,7 +1159,7 @@ mod tests {
         let health_plugin_id = health.plugin_id();
         let echo_plugin_id = echo.plugin_id();
 
-        let hub = DynamicHub::new()
+        let hub = DynamicHub::new("test")
             .register(health)
             .register(echo);
 
@@ -1229,7 +1235,7 @@ mod tests {
     fn plugin_registry_populated_on_register() {
         use crate::activations::health::Health;
 
-        let hub = DynamicHub::new().register(Health::new());
+        let hub = DynamicHub::new("test").register(Health::new());
 
         let registry = hub.registry();
         assert!(!registry.is_empty(), "registry should not be empty after registration");

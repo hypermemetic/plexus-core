@@ -15,7 +15,7 @@
 //! use std::sync::Arc;
 //!
 //! let hub = Arc::new(
-//!     DynamicHub::new()
+//!     DynamicHub::new("myapp")
 //!         .register(Health::new())
 //!         .register(Echo::new())
 //! );
@@ -30,6 +30,8 @@ pub mod serde_helpers;
 pub mod types;
 
 // Re-export commonly used items
+pub use builder::build_example_hub;
+#[allow(deprecated)]
 pub use builder::build_example_plexus;
 pub use mcp_bridge::PlexusMcpBridge;
 pub use plexus::{Activation, DynamicHub, PlexusError};

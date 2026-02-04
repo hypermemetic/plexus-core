@@ -6,7 +6,7 @@ description = "Core infrastructure for Plexus RPC: Activation trait, DynamicHub,
 license = "AGPL-3.0-only"
 
 [lib]
-name = "hub_core"
+name = "plexus_core"
 path = "src/lib.rs"
 
 [dependencies]

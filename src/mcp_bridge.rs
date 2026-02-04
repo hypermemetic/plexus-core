@@ -14,7 +14,7 @@ use rmcp::{
 };
 use serde_json::json;
 
-use crate::plexus::{Plexus, PlexusError, PluginSchema};
+use crate::plexus::{DynamicHub, PlexusError, PluginSchema};
 use crate::plexus::types::PlexusStreamItem;
 
 // =============================================================================
@@ -84,15 +84,15 @@ fn plexus_to_mcp_error(e: PlexusError) -> McpError {
 // Plexus MCP Bridge
 // =============================================================================
 
-/// MCP handler that bridges to Plexus
+/// MCP handler that bridges to Plexus RPC hub
 #[derive(Clone)]
 pub struct PlexusMcpBridge {
-    plexus: Arc<Plexus>,
+    hub: Arc<DynamicHub>,
 }
 
 impl PlexusMcpBridge {
-    pub fn new(plexus: Arc<Plexus>) -> Self {
-        Self { plexus }
+    pub fn new(hub: Arc<DynamicHub>) -> Self {
+        Self { hub }
     }
 }
 
@@ -116,7 +116,7 @@ impl ServerHandler for PlexusMcpBridge {
         _request: Option<PaginatedRequestParam>,
         _ctx: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, McpError> {
-        let schemas = self.plexus.list_plugin_schemas();
+        let schemas = self.hub.list_plugin_schemas();
         let tools = schemas_to_rmcp_tools(schemas);
 
         tracing::debug!("Listing {} tools", tools.len());
@@ -147,9 +147,9 @@ impl ServerHandler for PlexusMcpBridge {
         // Logger name: plexus.namespace.method (e.g., plexus.bash.execute)
         let logger = format!("plexus.{}", method_name);
 
-        // Call Plexus and get stream
+        // Call Plexus RPC hub and get stream
         let stream = self
-            .plexus
+            .hub
             .route(method_name, arguments)
             .await
             .map_err(plexus_to_mcp_error)?;

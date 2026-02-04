@@ -1,6 +1,7 @@
-//! Plexus - the central routing layer for activations
+//! DynamicHub - the central routing layer for activations
 //!
-//! Plexus IS an activation that also serves as the registry for other activations.
+//! DynamicHub IS an activation that also serves as the registry for other activations.
+//! It implements the Plexus RPC protocol for routing and introspection.
 //! It uses hub-macro for its methods, with the `call` method using the streaming
 //! pattern to forward responses from routed methods.
 
@@ -85,7 +86,7 @@ pub trait Activation: Send + Sync + 'static {
     fn long_description(&self) -> Option<&str> { None }
     fn methods(&self) -> Vec<&str>;
     fn method_help(&self, _method: &str) -> Option<String> { None }
-    /// Stable plugin instance ID for handle routing
+    /// Stable activation instance ID for handle routing
     /// By default generates a deterministic UUID from namespace+major_version
     /// Using major version only ensures handles survive minor/patch upgrades (semver)
     fn plugin_id(&self) -> uuid::Uuid {
@@ -100,7 +101,7 @@ pub trait Activation: Send + Sync + 'static {
 
     fn into_rpc_methods(self) -> Methods where Self: Sized;
 
-    /// Return this plugin's schema (methods + optional children)
+    /// Return this activation's schema (methods + optional children)
     fn plugin_schema(&self) -> PluginSchema {
         use std::collections::hash_map::DefaultHasher;
         use std::hash::{Hash, Hasher};
@@ -138,10 +139,10 @@ pub trait Activation: Send + Sync + 'static {
 // Child Routing for Hub Plugins
 // ============================================================================
 
-/// Trait for plugins that can route to child plugins
+/// Trait for activations that can route to child activations
 ///
-/// Hub plugins implement this to support nested method routing.
-/// When a method like "mercury.info" is called on a solar plugin,
+/// Hub activations implement this to support nested method routing.
+/// When a method like "mercury.info" is called on a solar activation,
 /// this trait enables routing to the mercury child.
 ///
 /// This trait is separate from Activation to avoid associated type issues
@@ -154,13 +155,13 @@ pub trait ChildRouter: Send + Sync {
     /// Call a method on this router
     async fn router_call(&self, method: &str, params: Value) -> Result<PlexusStream, PlexusError>;
 
-    /// Get a child plugin instance by name for nested routing
+    /// Get a child activation instance by name for nested routing
     async fn get_child(&self, name: &str) -> Option<Box<dyn ChildRouter>>;
 }
 
-/// Route a method call to a child plugin
+/// Route a method call to a child activation
 ///
-/// This is called from generated code when a hub plugin receives
+/// This is called from generated code when a hub activation receives
 /// a method that doesn't match its local methods. If the method
 /// contains a dot (e.g., "mercury.info"), it routes to the child.
 pub async fn route_to_child<T: ChildRouter + ?Sized>(
@@ -185,7 +186,7 @@ pub async fn route_to_child<T: ChildRouter + ?Sized>(
 
 /// Wrapper to implement ChildRouter for Arc<dyn ChildRouter>
 ///
-/// This allows Plexus to return its stored Arc<dyn ChildRouter> from get_child()
+/// This allows DynamicHub to return its stored Arc<dyn ChildRouter> from get_child()
 struct ArcChildRouter(Arc<dyn ChildRouter>);
 
 #[async_trait]
@@ -274,24 +275,24 @@ pub enum SchemaEvent {
 
 
 // ============================================================================
-// Plugin Registry
+// Activation Registry
 // ============================================================================
 
-/// Entry in the plugin registry
+/// Entry in the activation registry
 #[derive(Debug, Clone)]
 pub struct PluginEntry {
-    /// Stable plugin instance ID
+    /// Stable activation instance ID
     pub id: uuid::Uuid,
-    /// Current path/namespace for this plugin
+    /// Current path/namespace for this activation
     pub path: String,
-    /// Plugin type (e.g., "cone", "bash", "arbor")
+    /// Activation type (e.g., "cone", "bash", "arbor")
     pub plugin_type: String,
 }
 
-/// Registry mapping plugin UUIDs to their current paths
+/// Registry mapping activation UUIDs to their current paths
 ///
 /// This enables handle routing without path dependency - handles reference
-/// plugins by their stable UUID, and the registry maps to the current path.
+/// activations by their stable UUID, and the registry maps to the current path.
 #[derive(Default)]
 pub struct PluginRegistry {
     /// Lookup by plugin UUID
@@ -300,9 +301,9 @@ pub struct PluginRegistry {
     by_path: HashMap<String, uuid::Uuid>,
 }
 
-/// Read-only snapshot of the plugin registry
+/// Read-only snapshot of the activation registry
 ///
-/// Safe to use outside of Plexus locks.
+/// Safe to use outside of DynamicHub locks.
 #[derive(Clone)]
 pub struct PluginRegistrySnapshot {
     by_id: HashMap<uuid::Uuid, PluginEntry>,
@@ -310,22 +311,22 @@ pub struct PluginRegistrySnapshot {
 }
 
 impl PluginRegistrySnapshot {
-    /// Look up a plugin's path by its UUID
+    /// Look up an activation's path by its UUID
     pub fn lookup(&self, id: uuid::Uuid) -> Option<&str> {
         self.by_id.get(&id).map(|e| e.path.as_str())
     }
 
-    /// Look up a plugin's UUID by its path
+    /// Look up an activation's UUID by its path
     pub fn lookup_by_path(&self, path: &str) -> Option<uuid::Uuid> {
         self.by_path.get(path).copied()
     }
 
-    /// Get a plugin entry by its UUID
+    /// Get an activation entry by its UUID
     pub fn get(&self, id: uuid::Uuid) -> Option<&PluginEntry> {
         self.by_id.get(&id)
     }
 
-    /// List all registered plugins
+    /// List all registered activations
     pub fn list(&self) -> impl Iterator<Item = &PluginEntry> {
         self.by_id.values()
     }
@@ -347,29 +348,29 @@ impl PluginRegistry {
         Self::default()
     }
 
-    /// Look up a plugin's path by its UUID
+    /// Look up an activation's path by its UUID
     pub fn lookup(&self, id: uuid::Uuid) -> Option<&str> {
         self.by_id.get(&id).map(|e| e.path.as_str())
     }
 
-    /// Look up a plugin's UUID by its path
+    /// Look up an activation's UUID by its path
     pub fn lookup_by_path(&self, path: &str) -> Option<uuid::Uuid> {
         self.by_path.get(path).copied()
     }
 
-    /// Get a plugin entry by its UUID
+    /// Get an activation entry by its UUID
     pub fn get(&self, id: uuid::Uuid) -> Option<&PluginEntry> {
         self.by_id.get(&id)
     }
 
-    /// Register a plugin
+    /// Register an activation
     pub fn register(&mut self, id: uuid::Uuid, path: String, plugin_type: String) {
         let entry = PluginEntry { id, path: path.clone(), plugin_type };
         self.by_id.insert(id, entry);
         self.by_path.insert(path, id);
     }
 
-    /// List all registered plugins
+    /// List all registered activations
     pub fn list(&self) -> impl Iterator<Item = &PluginEntry> {
         self.by_id.values()
     }
@@ -395,7 +396,7 @@ struct DynamicHubInner {
     activations: HashMap<String, Arc<dyn ActivationObject>>,
     /// Child routers for direct nested routing (e.g., hub.solar.mercury.info)
     child_routers: HashMap<String, Arc<dyn ChildRouter>>,
-    /// Plugin registry mapping UUIDs to paths
+    /// Activation registry mapping UUIDs to paths
     registry: std::sync::RwLock<PluginRegistry>,
     pending_rpc: std::sync::Mutex<Vec<Box<dyn FnOnce() -> Methods + Send>>>,
 }
@@ -425,14 +426,6 @@ struct DynamicHubInner {
 pub struct DynamicHub {
     inner: Arc<DynamicHubInner>,
 }
-
-/// Deprecated: Use DynamicHub instead
-///
-/// Plexus has been renamed to DynamicHub to clarify that it's just an activation
-/// with dynamic registration, not special infrastructure. Any activation can be
-/// a hub - Solar routes to planets, DynamicHub routes to registered activations.
-#[deprecated(since = "0.3.0", note = "Use DynamicHub instead")]
-pub type Plexus = DynamicHub;
 
 // ============================================================================
 // DynamicHub Infrastructure (non-RPC methods)
@@ -471,7 +464,7 @@ impl DynamicHub {
         &self.inner.namespace
     }
 
-    /// Get access to the plugin registry
+    /// Get access to the activation registry
     pub fn registry(&self) -> std::sync::RwLockReadGuard<'_, PluginRegistry> {
         self.inner.registry.read().unwrap()
     }
@@ -485,7 +478,7 @@ impl DynamicHub {
         let inner = Arc::get_mut(&mut self.inner)
             .expect("Cannot register: DynamicHub has multiple references");
 
-        // Register in the plugin registry
+        // Register in the activation registry
         inner.registry.write().unwrap().register(
             plugin_id,
             namespace.clone(),
@@ -511,7 +504,7 @@ impl DynamicHub {
         let inner = Arc::get_mut(&mut self.inner)
             .expect("Cannot register: DynamicHub has multiple references");
 
-        // Register in the plugin registry
+        // Register in the activation registry
         inner.registry.write().unwrap().register(
             plugin_id,
             namespace.clone(),
@@ -592,9 +585,9 @@ impl DynamicHub {
         activation.call(method_name, params).await
     }
 
-    /// Resolve a handle using the plugin registry
+    /// Resolve a handle using the activation registry
     ///
-    /// Looks up the plugin by its UUID in the registry.
+    /// Looks up the activation by its UUID in the registry.
     pub async fn do_resolve_handle(&self, handle: &Handle) -> Result<PlexusStream, PlexusError> {
         let path = self.inner.registry.read().unwrap()
             .lookup(handle.plugin_id)
@@ -611,7 +604,7 @@ impl DynamicHub {
         self.inner.activations.get(namespace).map(|a| a.schema())
     }
 
-    /// Get a snapshot of the plugin registry (safe to use outside locks)
+    /// Get a snapshot of the activation registry (safe to use outside locks)
     pub fn registry_snapshot(&self) -> PluginRegistrySnapshot {
         let guard = self.inner.registry.read().unwrap();
         PluginRegistrySnapshot {
@@ -620,17 +613,17 @@ impl DynamicHub {
         }
     }
 
-    /// Look up a plugin path by its UUID
+    /// Look up an activation path by its UUID
     pub fn lookup_plugin(&self, id: uuid::Uuid) -> Option<String> {
         self.inner.registry.read().unwrap().lookup(id).map(|s| s.to_string())
     }
 
-    /// Look up a plugin UUID by its path
+    /// Look up an activation UUID by its path
     pub fn lookup_plugin_by_path(&self, path: &str) -> Option<uuid::Uuid> {
         self.inner.registry.read().unwrap().lookup_by_path(path)
     }
 
-    /// Get plugin schemas for all activations (including this hub itself)
+    /// Get activation schemas for all activations (including this hub itself)
     pub fn list_plugin_schemas(&self) -> Vec<PluginSchema> {
         let mut schemas = Vec::new();
 
@@ -666,7 +659,7 @@ impl DynamicHub {
         Ok((parts[0], parts[1]))
     }
 
-    /// Get child plugin summaries (for hub functionality)
+    /// Get child activation summaries (for hub functionality)
     /// Called by hub-macro when `hub` flag is set
     pub fn plugin_children(&self) -> Vec<ChildSummary> {
         self.inner.activations.values()
@@ -912,10 +905,10 @@ async fn pipe_stream_to_subscription(
 }
 
 // ============================================================================
-// DynamicHub RPC Methods (via hub-macro)
+// DynamicHub RPC Methods (via plexus-macros)
 // ============================================================================
 
-#[hub_macro::hub_methods(
+#[plexus_macros::hub_methods(
     namespace = "plexus",
     version = "1.0.0",
     description = "Central routing and introspection",
@@ -924,7 +917,7 @@ async fn pipe_stream_to_subscription(
 )]
 impl DynamicHub {
     /// Route a call to a registered activation
-    #[hub_macro::hub_method(
+    #[plexus_macros::hub_method(
         streaming,
         description = "Route a call to a registered activation",
         params(
@@ -965,11 +958,11 @@ impl DynamicHub {
         }
     }
 
-    /// Get plexus configuration hash (from the recursive schema)
+    /// Get Plexus RPC server configuration hash (from the recursive schema)
     ///
-    /// This hash changes whenever any method or child plugin changes.
+    /// This hash changes whenever any method or child activation changes.
     /// It's computed from the method hashes rolled up through the schema tree.
-    #[hub_macro::hub_method(description = "Get plexus configuration hash (from the recursive schema)\n\n This hash changes whenever any method or child plugin changes.\n It's computed from the method hashes rolled up through the schema tree.")]
+    #[plexus_macros::hub_method(description = "Get plexus configuration hash (from the recursive schema)\n\n This hash changes whenever any method or child plugin changes.\n It's computed from the method hashes rolled up through the schema tree.")]
     async fn hash(&self) -> impl Stream<Item = HashEvent> + Send + 'static {
         let schema = Activation::plugin_schema(self);
         stream! { yield HashEvent::Hash { value: schema.hash }; }
@@ -987,7 +980,7 @@ use std::sync::Weak;
 
 /// HubContext implementation for Weak<DynamicHub>
 ///
-/// This enables plugins to receive a weak reference to their parent DynamicHub,
+/// This enables activations to receive a weak reference to their parent DynamicHub,
 /// allowing them to resolve handles and route calls through the hub without
 /// creating reference cycles.
 #[async_trait]
@@ -1028,7 +1021,7 @@ impl ChildRouter for DynamicHub {
     }
 
     async fn get_child(&self, name: &str) -> Option<Box<dyn ChildRouter>> {
-        // Look up registered hub activations that implement ChildRouter
+        // Look up registered activations that implement ChildRouter
         self.inner.child_routers.get(name)
             .map(|router| {
                 // Clone the Arc and wrap in Box for the trait object
@@ -1104,14 +1097,14 @@ mod tests {
     // ========================================================================
 
     #[tokio::test]
-    async fn invariant_resolve_handle_unknown_plugin() {
+    async fn invariant_resolve_handle_unknown_activation() {
         use crate::activations::health::Health;
         use crate::types::Handle;
         use uuid::Uuid;
 
         let hub = DynamicHub::new("test").register(Health::new());
 
-        // Handle for an unregistered plugin (random UUID)
+        // Handle for an unregistered activation (random UUID)
         let unknown_plugin_id = Uuid::new_v4();
         let handle = Handle::new(unknown_plugin_id, "1.0.0", "some_method");
 
@@ -1119,10 +1112,10 @@ mod tests {
 
         match result {
             Err(PlexusError::ActivationNotFound(_)) => {
-                // Expected - plugin not found
+                // Expected - activation not found
             }
             Err(other) => panic!("Expected ActivationNotFound, got {:?}", other),
-            Ok(_) => panic!("Expected error for unknown plugin"),
+            Ok(_) => panic!("Expected error for unknown activation"),
         }
     }
 
@@ -1133,7 +1126,7 @@ mod tests {
 
         let hub = DynamicHub::new("test").register(Health::new());
 
-        // Handle for health plugin (which doesn't support handle resolution)
+        // Handle for health activation (which doesn't support handle resolution)
         let handle = Handle::new(Health::PLUGIN_ID, "1.0.0", "check");
 
         let result = hub.do_resolve_handle(&handle).await;
@@ -1163,19 +1156,19 @@ mod tests {
             .register(health)
             .register(echo);
 
-        // Health handle → health plugin
+        // Health handle → health activation
         let health_handle = Handle::new(health_plugin_id, "1.0.0", "check");
         match hub.do_resolve_handle(&health_handle).await {
             Err(PlexusError::HandleNotSupported(name)) => assert_eq!(name, "health"),
-            Err(other) => panic!("health handle should route to health plugin, got {:?}", other),
+            Err(other) => panic!("health handle should route to health activation, got {:?}", other),
             Ok(_) => panic!("health handle should return HandleNotSupported"),
         }
 
-        // Echo handle → echo plugin
+        // Echo handle → echo activation
         let echo_handle = Handle::new(echo_plugin_id, "1.0.0", "echo");
         match hub.do_resolve_handle(&echo_handle).await {
             Err(PlexusError::HandleNotSupported(name)) => assert_eq!(name, "echo"),
-            Err(other) => panic!("echo handle should route to echo plugin, got {:?}", other),
+            Err(other) => panic!("echo handle should route to echo activation, got {:?}", other),
             Ok(_) => panic!("echo handle should return HandleNotSupported"),
         }
 
@@ -1197,7 +1190,7 @@ mod tests {
         let health = Health::new();
         let echo = Echo::new();
 
-        // Same meta, different plugins → different routing targets (by plugin_id)
+        // Same meta, different activations → different routing targets (by plugin_id)
         let health_handle = Handle::new(health.plugin_id(), "1.0.0", "check")
             .with_meta(vec!["msg-123".into(), "user".into()]);
         let echo_handle = Handle::new(echo.plugin_id(), "1.0.0", "echo")
@@ -1216,7 +1209,7 @@ mod tests {
         let mut registry = PluginRegistry::new();
         let id = uuid::Uuid::new_v4();
 
-        // Register a plugin
+        // Register an activation
         registry.register(id, "test_plugin".to_string(), "test".to_string());
 
         // Lookup by ID
@@ -1240,7 +1233,7 @@ mod tests {
         let registry = hub.registry();
         assert!(!registry.is_empty(), "registry should not be empty after registration");
 
-        // Health plugin should be registered
+        // Health activation should be registered
         let health_id = registry.lookup_by_path("health");
         assert!(health_id.is_some(), "health should be registered by path");
 
@@ -1253,12 +1246,12 @@ mod tests {
     fn plugin_registry_deterministic_uuid() {
         use crate::activations::health::Health;
 
-        // Same plugin registered twice should produce same UUID
+        // Same activation registered twice should produce same UUID
         let health1 = Health::new();
         let health2 = Health::new();
 
         assert_eq!(health1.plugin_id(), health2.plugin_id(),
-            "same plugin type should have deterministic UUID");
+            "same activation type should have deterministic UUID");
 
         // UUID should be based on namespace+major_version (semver compatibility)
         let expected = uuid::Uuid::new_v5(

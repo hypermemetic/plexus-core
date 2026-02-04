@@ -1,8 +1,8 @@
-//! Plexus streaming types
+//! Plexus RPC streaming types
 //!
-//! These types define the wire format for all plexus streaming responses.
+//! These types define the wire format for all Plexus RPC streaming responses.
 //! The key architectural principle is "caller wraps" - activations return
-//! typed domain events, and the caller (Plexus) wraps them with metadata.
+//! typed domain events, and the caller (DynamicHub routing layer) wraps them with metadata.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -14,10 +14,10 @@ use serde_json::Value;
 /// provenance tracking and cache invalidation.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct StreamMetadata {
-    /// Call path through the system (e.g., ["plexus", "health"])
+    /// Call path through the system (e.g., ["substrate", "health"])
     pub provenance: Vec<String>,
 
-    /// Hash of plexus configuration for cache invalidation
+    /// Hash of Plexus RPC server configuration for cache invalidation
     /// Changes when activations are added/removed/updated
     pub plexus_hash: String,
 
@@ -38,7 +38,7 @@ impl StreamMetadata {
 
 /// Universal stream item - all activations emit this type
 ///
-/// The caller (Plexus routing layer) wraps activation responses with
+/// The caller (DynamicHub routing layer) wraps activation responses with
 /// metadata. This is the only type that crosses the wire.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -141,7 +141,7 @@ mod tests {
     #[test]
     fn test_stream_item_data_serialization() {
         let metadata = StreamMetadata {
-            provenance: vec!["plexus".into(), "health".into()],
+            provenance: vec!["substrate".into(), "health".into()],
             plexus_hash: "abc123".into(),
             timestamp: 1735052400,
         };
@@ -156,12 +156,12 @@ mod tests {
         assert!(json.contains("\"type\":\"data\""));
         assert!(json.contains("\"content_type\":\"health.status\""));
         assert!(json.contains("\"plexus_hash\":\"abc123\""));
-        assert!(json.contains("\"provenance\":[\"plexus\",\"health\"]"));
+        assert!(json.contains("\"provenance\":[\"substrate\",\"health\"]"));
     }
 
     #[test]
     fn test_stream_item_error_serialization() {
-        let metadata = StreamMetadata::new(vec!["plexus".into()], "hash".into());
+        let metadata = StreamMetadata::new(vec!["substrate".into()], "hash".into());
 
         let item = PlexusStreamItem::error(
             metadata,
@@ -179,7 +179,7 @@ mod tests {
 
     #[test]
     fn test_stream_item_progress_serialization() {
-        let metadata = StreamMetadata::new(vec!["plexus".into()], "hash".into());
+        let metadata = StreamMetadata::new(vec!["substrate".into()], "hash".into());
 
         let item = PlexusStreamItem::progress(metadata, "Processing...".into(), Some(50.0));
 
@@ -191,7 +191,7 @@ mod tests {
 
     #[test]
     fn test_stream_item_done_serialization() {
-        let metadata = StreamMetadata::new(vec!["plexus".into()], "hash".into());
+        let metadata = StreamMetadata::new(vec!["substrate".into()], "hash".into());
 
         let item = PlexusStreamItem::done(metadata);
 

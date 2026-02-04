@@ -1,10 +1,10 @@
-//! Hub Core - Core infrastructure for building hub-based systems
+//! Hub Core - Core infrastructure for building Plexus RPC servers
 //!
 //! This crate provides:
-//! - `DynamicHub` - Dynamic routing hub for activations (formerly `Plexus`)
-//! - `Activation` - Trait for implementing plugins
+//! - `DynamicHub` - Dynamic routing hub for activations (implements Plexus RPC protocol)
+//! - `Activation` - Trait for implementing activations
 //! - `PlexusMcpBridge` - MCP server integration
-//! - `Handle` - Typed references to plugin method results
+//! - `Handle` - Typed references to activation method results
 //!
 //! # Example
 //!
@@ -31,10 +31,6 @@ pub mod types;
 
 // Re-export commonly used items
 pub use builder::build_example_hub;
-#[allow(deprecated)]
-pub use builder::build_example_plexus;
 pub use mcp_bridge::PlexusMcpBridge;
 pub use plexus::{Activation, DynamicHub, PlexusError};
-#[allow(deprecated)]
-pub use plexus::Plexus;
 pub use types::{Envelope, Handle, HandleParseError, HandleResolutionParams, Origin};

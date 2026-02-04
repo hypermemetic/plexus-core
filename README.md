@@ -1,18 +1,18 @@
 # hub-core
 
-Core infrastructure for building activation-based systems with optional dynamic routing.
+Core infrastructure for building Plexus RPC services with optional dynamic routing.
 
 ## Overview
 
-hub-core provides the foundation for building pluggable systems with hierarchical routing and schema introspection:
+hub-core provides the foundation for building Plexus RPC services with hierarchical routing and schema introspection:
 
-- **Activation** - Trait for implementing plugins/services
-- **DynamicHub** - Optional composition tool for hosting multiple activations (formerly Plexus)
+- **Activation** - Trait for implementing Plexus RPC services/plugins
+- **DynamicHub** - Optional routing layer for hosting multiple activations under one namespace
 - **PlexusMcpBridge** - MCP server integration via rmcp
 - **Handle** - Typed references to plugin method results
 - **hub-macro** - Procedural macro for generating activation boilerplate
 
-> **Key Insight**: Any activation can be hosted directly. DynamicHub is just an activation with `.register()` - it's not required infrastructure.
+> **Key Insight**: Any activation can be hosted directly as a Plexus RPC server. DynamicHub is just an activation with `.register()` - it's not required infrastructure.
 
 > **Note**: `Plexus` has been renamed to `DynamicHub` to clarify that it's an activation with dynamic registration, not special infrastructure. The `Plexus` type alias remains for backwards compatibility but is deprecated.
 
@@ -20,7 +20,7 @@ hub-core provides the foundation for building pluggable systems with hierarchica
 
 ### Single Activation (Direct Hosting)
 
-For a single service or plugin, host it directly without DynamicHub:
+For a single Plexus RPC service, host it directly without DynamicHub:
 
 ```rust
 use hub_core::activations::echo::Echo;
@@ -28,12 +28,12 @@ use std::sync::Arc;
 
 // Single activation - no DynamicHub needed
 let echo = Arc::new(Echo::new());
-// Use with hub-transport or your own server
+// Use with hub-transport or your own Plexus RPC server
 ```
 
 ### Multiple Activations (Composition)
 
-For composing multiple activations under one namespace, use DynamicHub:
+For composing multiple Plexus RPC activations under one namespace, use DynamicHub:
 
 ```rust
 use hub_core::plexus::DynamicHub;
@@ -84,7 +84,7 @@ impl MyApp {
 
 ## MCP Bridge
 
-hub-core includes an MCP server bridge that exposes activations as MCP tools.
+hub-core includes an MCP server bridge that exposes Plexus RPC activations as MCP tools.
 
 ### Single Activation
 
@@ -119,7 +119,7 @@ let bridge = PlexusMcpBridge::new(hub);
 
 ### Hub Activations
 
-Any activation can route to children by implementing `ChildRouter`. This enables nested method routing without DynamicHub:
+Any Plexus RPC activation can route to children by implementing `ChildRouter`. This enables nested method routing without DynamicHub:
 
 - **Solar** - Routes to planets (hardcoded children)
 - **DynamicHub** - Routes to registered activations (dynamic children via `.register()`)
@@ -142,21 +142,21 @@ let hub = Arc::new(
 ### When to Use DynamicHub
 
 **Use DynamicHub when:**
-- You need to compose multiple top-level activations
+- You need to compose multiple top-level Plexus RPC activations
 - You want dynamic registration (add activations at runtime)
-- You're building a multi-service application server (like substrate)
+- You're building a multi-service Plexus RPC server (like substrate)
 
 **Don't use DynamicHub when:**
-- You have a single service/plugin (host it directly)
+- You have a single Plexus RPC service (host it directly)
 - Your activation already routes to children (like Solar)
 - You want a simpler deployment
 
 ### Direct Activation Hosting
 
-The recommended pattern for single services is direct hosting:
+The recommended pattern for single Plexus RPC services is direct hosting:
 
 ```rust
-// Good: Direct hosting for single service
+// Good: Direct hosting for single Plexus RPC service
 let my_service = Arc::new(MyService::new());
 TransportServer::builder(my_service, converter).serve().await?;
 

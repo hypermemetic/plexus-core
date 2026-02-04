@@ -2,7 +2,7 @@
 name = "hub-core"
 version = "0.2.1-worktree"
 edition = "2021"
-description = "Core hub infrastructure - plexus routing, activation framework, MCP bridge"
+description = "Core infrastructure for Plexus RPC: Activation trait, DynamicHub, schemas"
 license = "AGPL-3.0-only"
 
 [lib]

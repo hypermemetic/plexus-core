@@ -9,9 +9,9 @@
 //! # Example
 //!
 //! ```rust,no_run
-//! use hub_core::plexus::DynamicHub;
-//! use hub_core::activations::echo::Echo;
-//! use hub_core::activations::health::Health;
+//! use plexus_core::plexus::DynamicHub;
+//! use plexus_core::activations::echo::Echo;
+//! use plexus_core::activations::health::Health;
 //! use std::sync::Arc;
 //!
 //! let hub = Arc::new(

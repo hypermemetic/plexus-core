@@ -19,7 +19,7 @@ pub use errors::{GuidedError, GuidedErrorData, TryRequest};
 #[deprecated(note = "Middleware removed - guidance provided via PlexusStreamEvent::Guidance")]
 pub use middleware::{ActivationRegistry, GuidedErrorMiddleware};
 pub use path::Provenance;
-pub use plexus::{Activation, ActivationInfo, ChildRouter, DynamicHub, PlexusError, route_to_child, ActivationFullSchema};
+pub use plexus::{Activation, ActivationInfo, ChildRouter, DynamicHub, PlexusError, route_to_child};
 pub use crate::types::Handle;
 pub use schema::{ChildSummary, MethodSchema, PluginSchema, Schema, SchemaProperty, SchemaResult, SchemaType};
 pub use types::{PlexusStreamItem, StreamMetadata};

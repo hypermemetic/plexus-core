@@ -66,10 +66,6 @@ pub struct ActivationInfo {
     pub methods: Vec<String>,
 }
 
-/// Full schema for an activation (deprecated - use PluginSchema)
-#[deprecated(note = "Use PluginSchema instead")]
-pub type ActivationFullSchema = PluginSchema;
-
 // ============================================================================
 // Activation Trait
 // ============================================================================

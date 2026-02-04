@@ -1,6 +1,6 @@
 //! Streaming helpers for the caller-wraps architecture
 //!
-//! These functions are used by the Plexus routing layer to wrap activation
+//! These functions are used by the DynamicHub routing layer to wrap activation
 //! responses with metadata. Activations return typed domain events, and
 //! the caller uses these helpers to create PlexusStreamItems.
 

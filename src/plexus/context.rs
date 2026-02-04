@@ -1,15 +1,15 @@
-//! Global plexus context for sharing state with activations
+//! Global Plexus RPC context for sharing state with activations
 //!
-//! This module provides a thread-safe way to share the plexus hash
-//! with all activations. The hash is set once during plexus initialization
+//! This module provides a thread-safe way to share the Plexus RPC server hash
+//! with all activations. The hash is set once during hub initialization
 //! and can be read by any activation when creating stream items.
 
 use std::sync::OnceLock;
 
-/// Global plexus context singleton
+/// Global Plexus RPC context singleton
 static PLEXUS_CONTEXT: OnceLock<PlexusContext> = OnceLock::new();
 
-/// Shared plexus context accessible to all activations
+/// Shared Plexus RPC context accessible to all activations
 #[derive(Debug, Clone)]
 pub struct PlexusContext {
     /// Hash of all activations for cache invalidation
@@ -17,15 +17,15 @@ pub struct PlexusContext {
 }
 
 impl PlexusContext {
-    /// Initialize the global plexus context
+    /// Initialize the global Plexus RPC context
     ///
-    /// This should be called once during plexus initialization.
+    /// This should be called once during hub initialization.
     /// Subsequent calls will be ignored.
     pub fn init(hash: String) {
         let _ = PLEXUS_CONTEXT.set(PlexusContext { hash });
     }
 
-    /// Get the global plexus hash
+    /// Get the global Plexus RPC server hash
     ///
     /// Returns an empty string if the context hasn't been initialized yet.
     pub fn hash() -> String {

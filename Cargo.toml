@@ -1,5 +1,5 @@
 [package]
-name = "hub-core"
+name = "plexus-core"
 version = "0.2.1-worktree"
 edition = "2021"
 description = "Core infrastructure for Plexus RPC: Activation trait, DynamicHub, schemas"
@@ -43,7 +43,7 @@ jsonrpsee = { version = "0.26", features = ["server", "macros"] }
 rmcp = { version = "0.12", features = ["server", "transport-io", "transport-streamable-http-server"] }
 
 # Hub macro for activation generation
-hub-macro = { path = "../hub-macro" }
+plexus-macros = { path = "../hub-macro" }
 
 [dev-dependencies]
 tempfile = "3"

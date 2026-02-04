@@ -9,9 +9,6 @@ use crate::activations::echo::Echo;
 use crate::activations::health::Health;
 use crate::plexus::DynamicHub;
 
-#[allow(deprecated)]
-use crate::plexus::Plexus;
-
 /// Build an example hub with minimal activations
 ///
 /// This demonstrates how to construct a DynamicHub instance.
@@ -28,10 +25,4 @@ pub fn build_example_hub() -> Arc<DynamicHub> {
             .register(Health::new())
             .register(Echo::new()),
     )
-}
-
-/// Deprecated: Use build_example_hub instead
-#[deprecated(since = "0.3.0", note = "Use build_example_hub instead")]
-pub fn build_example_plexus() -> Arc<Plexus> {
-    build_example_hub()
 }

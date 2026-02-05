@@ -16,6 +16,7 @@ use async_stream::stream;
 use async_trait::async_trait;
 use futures::Stream;
 use jsonrpsee::core::server::Methods;
+use jsonrpsee::SubscriptionMessage;
 use jsonrpsee::RpcModule;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -758,6 +759,34 @@ impl DynamicHub {
             }
         )?;
 
+        // Register _info well-known endpoint (no namespace prefix)
+        // Returns backend name as a single-item stream with automatic Done event
+        let backend_name = self.runtime_namespace().to_string();
+        module.register_subscription(
+            "_info",
+            "_info",
+            "_info_unsub",
+            move |_params, pending, _ctx, _ext| {
+                let name = backend_name.clone();
+                Box::pin(async move {
+                    // Create a single-item stream with the info response
+                    let info_stream = futures::stream::once(async move {
+                        serde_json::json!({"backend": name})
+                    });
+
+                    // Wrap to auto-append Done event
+                    let wrapped = super::streaming::wrap_stream(
+                        info_stream,
+                        "_info",
+                        vec![]
+                    );
+
+                    // Pipe to subscription (handles Done automatically)
+                    pipe_stream_to_subscription(pending, wrapped).await
+                })
+            }
+        )?;
+
         // Add all registered activation RPC methods
         let pending = std::mem::take(&mut *self.inner.pending_rpc.lock().unwrap());
         for factory in pending {
@@ -855,6 +884,34 @@ impl DynamicHub {
                         yield result;
                     };
                     let wrapped = super::streaming::wrap_stream(stream, schema_content_type, vec![ns_static.into()]);
+                    pipe_stream_to_subscription(pending, wrapped).await
+                })
+            }
+        )?;
+
+        // Register _info well-known endpoint (no namespace prefix)
+        // Returns backend name as a single-item stream with automatic Done event
+        let backend_name = hub.runtime_namespace().to_string();
+        module.register_subscription(
+            "_info",
+            "_info",
+            "_info_unsub",
+            move |_params, pending, _ctx, _ext| {
+                let name = backend_name.clone();
+                Box::pin(async move {
+                    // Create a single-item stream with the info response
+                    let info_stream = futures::stream::once(async move {
+                        serde_json::json!({"backend": name})
+                    });
+
+                    // Wrap to auto-append Done event
+                    let wrapped = super::streaming::wrap_stream(
+                        info_stream,
+                        "_info",
+                        vec![]
+                    );
+
+                    // Pipe to subscription (handles Done automatically)
                     pipe_stream_to_subscription(pending, wrapped).await
                 })
             }

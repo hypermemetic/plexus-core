@@ -21,7 +21,7 @@ pub use middleware::{ActivationRegistry, GuidedErrorMiddleware};
 pub use path::Provenance;
 pub use plexus::{Activation, ActivationInfo, ChildRouter, DynamicHub, PlexusError, route_to_child};
 pub use crate::types::Handle;
-pub use schema::{ChildSummary, MethodSchema, PluginSchema, Schema, SchemaProperty, SchemaResult, SchemaType};
+pub use schema::{ChildHashes, ChildSummary, MethodSchema, PluginHashes, PluginSchema, Schema, SchemaProperty, SchemaResult, SchemaType};
 pub use types::{PlexusStreamItem, StreamMetadata};
 pub use method_enum::MethodEnumSchema;
 pub use streaming::{PlexusStream, wrap_stream, error_stream, done_stream, progress_stream};

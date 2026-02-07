@@ -38,8 +38,18 @@ pub struct PluginSchema {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub long_description: Option<String>,
 
-    /// Content hash computed from methods + children hashes (for cache invalidation)
-    /// This hash changes when any method or child plugin changes
+    /// Hash of ONLY this plugin's methods (ignores children)
+    /// Changes when method signatures, names, or descriptions change
+    pub self_hash: String,
+
+    /// Hash of ONLY child plugin hashes (None for leaf plugins)
+    /// Changes when any child's hash changes (recursively)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub children_hash: Option<String>,
+
+    /// Composite hash = hash(self_hash + children_hash)
+    /// Use this if you want a single hash for the entire subtree
+    /// Backward compatible with previous single-hash system
     pub hash: String,
 
     /// Methods exposed by this plugin
@@ -93,26 +103,39 @@ pub struct MethodSchema {
 }
 
 impl PluginSchema {
-    /// Compute hash from methods and children
-    fn compute_hash(methods: &[MethodSchema], children: Option<&[ChildSummary]>) -> String {
+    /// Compute all three hashes (self, children, composite)
+    fn compute_hashes(
+        methods: &[MethodSchema],
+        children: Option<&[ChildSummary]>,
+    ) -> (String, Option<String>, String) {
         use std::collections::hash_map::DefaultHasher;
         use std::hash::{Hash, Hasher};
 
-        let mut hasher = DefaultHasher::new();
-
-        // Hash all method hashes
+        // Compute self_hash (methods only)
+        let mut self_hasher = DefaultHasher::new();
         for m in methods {
-            m.hash.hash(&mut hasher);
+            m.hash.hash(&mut self_hasher);
         }
+        let self_hash = format!("{:016x}", self_hasher.finish());
 
-        // Hash all children hashes
-        if let Some(kids) = children {
+        // Compute children_hash (children only)
+        let children_hash = children.map(|kids| {
+            let mut children_hasher = DefaultHasher::new();
             for c in kids {
-                c.hash.hash(&mut hasher);
+                c.hash.hash(&mut children_hasher);
             }
-        }
+            format!("{:016x}", children_hasher.finish())
+        });
 
-        format!("{:016x}", hasher.finish())
+        // Compute composite hash (both)
+        let mut composite_hasher = DefaultHasher::new();
+        self_hash.hash(&mut composite_hasher);
+        if let Some(ref ch) = children_hash {
+            ch.hash(&mut composite_hasher);
+        }
+        let hash = format!("{:016x}", composite_hasher.finish());
+
+        (self_hash, children_hash, hash)
     }
 
     /// Validate no name collisions exist within a plugin
@@ -170,12 +193,14 @@ impl PluginSchema {
     ) -> Self {
         let namespace = namespace.into();
         Self::validate_no_collisions(&namespace, &methods, None);
-        let hash = Self::compute_hash(&methods, None);
+        let (self_hash, children_hash, hash) = Self::compute_hashes(&methods, None);
         Self {
             namespace,
             version: version.into(),
             description: description.into(),
             long_description: None,
+            self_hash,
+            children_hash,
             hash,
             methods,
             children: None,
@@ -192,12 +217,14 @@ impl PluginSchema {
     ) -> Self {
         let namespace = namespace.into();
         Self::validate_no_collisions(&namespace, &methods, None);
-        let hash = Self::compute_hash(&methods, None);
+        let (self_hash, children_hash, hash) = Self::compute_hashes(&methods, None);
         Self {
             namespace,
             version: version.into(),
             description: description.into(),
             long_description: Some(long_description.into()),
+            self_hash,
+            children_hash,
             hash,
             methods,
             children: None,
@@ -214,12 +241,14 @@ impl PluginSchema {
     ) -> Self {
         let namespace = namespace.into();
         Self::validate_no_collisions(&namespace, &methods, Some(&children));
-        let hash = Self::compute_hash(&methods, Some(&children));
+        let (self_hash, children_hash, hash) = Self::compute_hashes(&methods, Some(&children));
         Self {
             namespace,
             version: version.into(),
             description: description.into(),
             long_description: None,
+            self_hash,
+            children_hash,
             hash,
             methods,
             children: Some(children),
@@ -237,12 +266,14 @@ impl PluginSchema {
     ) -> Self {
         let namespace = namespace.into();
         Self::validate_no_collisions(&namespace, &methods, Some(&children));
-        let hash = Self::compute_hash(&methods, Some(&children));
+        let (self_hash, children_hash, hash) = Self::compute_hashes(&methods, Some(&children));
         Self {
             namespace,
             version: version.into(),
             description: description.into(),
             long_description: Some(long_description.into()),
+            self_hash,
+            children_hash,
             hash,
             methods,
             children: Some(children),
@@ -270,6 +301,25 @@ pub struct ChildSummary {
     pub description: String,
 
     /// Content hash for cache invalidation
+    pub hash: String,
+}
+
+/// Schema summary containing only hashes (for cache validation)
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PluginHashes {
+    pub namespace: String,
+    pub self_hash: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub children_hash: Option<String>,
+    pub hash: String,
+    /// Child plugin hashes (for recursive checking)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub children: Option<Vec<ChildHashes>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ChildHashes {
+    pub namespace: String,
     pub hash: String,
 }
 
@@ -651,5 +701,74 @@ mod tests {
 
         let json = serde_json::to_string_pretty(&schema).unwrap();
         assert!(json.contains("uuid"));
+    }
+
+    #[test]
+    fn test_self_hash_changes_on_method_change() {
+        let schema1 = PluginSchema::leaf(
+            "test",
+            "1.0",
+            "desc",
+            vec![MethodSchema::new("foo", "bar", "hash1")],
+        );
+
+        let schema2 = PluginSchema::leaf(
+            "test",
+            "1.0",
+            "desc",
+            vec![MethodSchema::new("foo", "baz", "hash2")],  // Changed description
+        );
+
+        assert_ne!(schema1.self_hash, schema2.self_hash, "self_hash should change when methods change");
+        assert_eq!(schema1.children_hash, schema2.children_hash, "children_hash should stay same (both None)");
+        assert_ne!(schema1.hash, schema2.hash, "composite hash should change");
+    }
+
+    #[test]
+    fn test_children_hash_changes_on_child_change() {
+        let child1 = ChildSummary {
+            namespace: "child".into(),
+            description: "desc".into(),
+            hash: "old_hash".into(),
+        };
+
+        let child2 = ChildSummary {
+            namespace: "child".into(),
+            description: "desc".into(),
+            hash: "new_hash".into(),
+        };
+
+        let schema1 = PluginSchema::hub(
+            "parent",
+            "1.0",
+            "desc",
+            vec![],
+            vec![child1],
+        );
+
+        let schema2 = PluginSchema::hub(
+            "parent",
+            "1.0",
+            "desc",
+            vec![],
+            vec![child2],
+        );
+
+        assert_eq!(schema1.self_hash, schema2.self_hash, "self_hash should stay same (no methods changed)");
+        assert_ne!(schema1.children_hash, schema2.children_hash, "children_hash should change when child hash changes");
+        assert_ne!(schema1.hash, schema2.hash, "composite hash should change");
+    }
+
+    #[test]
+    fn test_leaf_has_no_children_hash() {
+        let schema = PluginSchema::leaf(
+            "leaf",
+            "1.0",
+            "desc",
+            vec![MethodSchema::new("method", "desc", "hash")],
+        );
+
+        assert!(schema.children_hash.is_none(), "leaf plugin should have None for children_hash");
+        assert_ne!(schema.self_hash, schema.hash, "leaf plugin's composite hash is hash(self_hash), not equal to self_hash");
     }
 }

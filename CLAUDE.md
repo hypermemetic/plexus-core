@@ -68,3 +68,117 @@ plans/
 ```
 
 When a ticket is completed, check its `unlocks` field to identify newly unblocked work.
+
+---
+
+## Plexus RPC
+
+**Location**: `plexus-core/`, `plexus-macros/`, `plexus-transport/`, `plexus-substrate/`, `plexus-registry/` (in hypermemetic repo)
+**Language**: Rust
+**Protocol**: JSON-RPC 2.0 over WebSocket
+
+### What It Is
+
+Plexus is a streaming RPC framework where code IS schema. Proc macros extract API schemas directly from Rust function signatures -- no IDL files, no code generation step, no schema drift. Every Plexus server is self-describing and introspectable at runtime.
+
+### Crate Dependency Graph
+
+```
+plexus-macros     -> Proc macros (#[hub_methods], #[hub_method]) generate Activation impls from Rust code
+plexus-core       -> Core types: Activation trait, DynamicHub (router), ChildRouter, schema types, Handle system
+plexus-transport  -> Server layer: WebSocket JSON-RPC, stdio transport, MCP HTTP+SSE
+plexus-substrate  -> Reference server hosting multiple activations (arbor, cone, bash, hyperforge, etc.)
+plexus-registry   -> Backend discovery service (SQLite+TOML), enables multi-backend routing
+```
+
+### Core Concepts
+
+**Activation**: A unit of functionality implementing the `Activation` trait. Has a namespace, version, methods, and optionally children.
+
+```rust
+#[hub_methods(namespace = "echo", version = "1.0.0")]
+impl Echo {
+    #[hub_method]
+    async fn once(&self, req: EchoRequest) -> impl Stream<Item = EchoEvent> { ... }
+}
+```
+
+The proc macro generates: Activation trait impl, method enum with JSON Schema, RPC dispatch, schema() introspection method. The function signature IS the API contract.
+
+**DynamicHub**: A router activation that composes child activations. `"arbor.tree_create"` splits on first dot, routes to `arbor` child, calls `tree_create`. DynamicHub is itself just an Activation -- no special infrastructure.
+
+**Streaming-first**: Every method returns `impl Stream<Item = T>`. Response items are `PlexusStreamItem`:
+- `Content { metadata, content_type, data }` -- actual response data
+- `Progress { metadata, message, percentage }` -- progress updates
+- `Error { metadata, message, code, recoverable }` -- error events
+- `Done { metadata }` -- stream termination
+
+Request-response semantics = single Content + Done.
+
+**Content-hashed schemas**: Each method and plugin has a content hash. Parent hashes incorporate child hashes. Root hash changes when ANY descendant changes. Enables cache invalidation and drift detection.
+
+**Hierarchical namespacing**: Activations can nest arbitrarily deep via ChildRouter trait. Method paths are dot-separated. Hub activations route to children; leaf activations contain only methods.
+
+### Protocol
+
+JSON-RPC 2.0 over WebSocket. Core RPC methods:
+- `plexus_call` -- invoke a method: `{ "method": "namespace.method", "params": {...} }`
+- `plexus_schema` -- get root hub schema (child schemas fetched lazily)
+- `{namespace}.schema` -- get any activation's schema directly
+
+### Schema System
+
+```rust
+PluginSchema {
+    namespace, version, description,
+    methods: Vec<MethodSchema>,        // name, description, params (JSON Schema), returns (JSON Schema), hash
+    children: Option<Vec<ChildSummary>>, // summaries only, not recursive
+    hash: String,                       // content hash
+}
+```
+
+Child schemas are NOT embedded -- clients fetch them individually via lazy traversal. This keeps responses lightweight.
+
+### Macro Rules
+
+Method signatures parsed by `#[hub_method]`:
+- Must be `async`
+- First non-self param -> input schema (must impl `Deserialize + JsonSchema`)
+- Return type must be `impl Stream<Item = EventType> + Send + 'static`
+- Params named `ctx`/`context` are skipped (context injection)
+- Doc comments become method descriptions in schema
+
+### Discovery Pipeline
+
+```
+Rust types -> (plexus-macros) -> Runtime JSON Schema -> (synapse --emit-ir) -> IR -> (codegen) -> TS/Python/Rust clients
+```
+
+Synapse CLI (Haskell) connects to any Plexus server, discovers schema at runtime, emits IR for client code generation. The CLI writes itself from the API structure.
+
+### Key Source Files
+
+```
+plexus-core/src/plexus/
+  plexus.rs        -- Activation trait, DynamicHub, ChildRouter
+  schema.rs        -- PluginSchema, MethodSchema types
+  stream.rs        -- PlexusStreamItem, PlexusStream
+  handle.rs        -- Handle types (typed references with provenance)
+  bridge.rs        -- PlexusMcpBridge (MCP server integration)
+
+plexus-macros/src/
+  lib.rs           -- #[hub_methods] and #[hub_method] proc macro entry points
+
+plexus-transport/src/
+  websocket.rs     -- WebSocket JSON-RPC server
+  stdio.rs         -- Stdio transport
+  mcp.rs           -- MCP HTTP+SSE transport
+```
+
+### Design Principles
+
+1. **Code IS Schema** -- Rust type signature defines the API contract. Zero drift by construction.
+2. **Streaming First** -- All methods return streams. Request-response is a degenerate case.
+3. **Hierarchical Composition** -- Activations route to children, enabling arbitrary depth without central registry.
+4. **Identity via Content Hash** -- Schemas versioned by content, not arbitrary numbers.
+5. **No Magic** -- DynamicHub is just an Activation. Routing is explicit. No hidden infrastructure.

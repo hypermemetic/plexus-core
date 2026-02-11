@@ -34,6 +34,35 @@ pub enum PlexusError {
     InvalidParams(String),
     ExecutionError(String),
     HandleNotSupported(String),
+    TransportError(TransportErrorKind),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "error_kind", rename_all = "snake_case")]
+pub enum TransportErrorKind {
+    ConnectionRefused { host: String, port: u16 },
+    ConnectionTimeout { host: String, port: u16 },
+    ProtocolError { message: String },
+    NetworkError { message: String },
+}
+
+impl std::fmt::Display for TransportErrorKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TransportErrorKind::ConnectionRefused { host, port } => {
+                write!(f, "Connection refused to {}:{}", host, port)
+            }
+            TransportErrorKind::ConnectionTimeout { host, port } => {
+                write!(f, "Connection timeout to {}:{}", host, port)
+            }
+            TransportErrorKind::ProtocolError { message } => {
+                write!(f, "Protocol error: {}", message)
+            }
+            TransportErrorKind::NetworkError { message } => {
+                write!(f, "Network error: {}", message)
+            }
+        }
+    }
 }
 
 impl std::fmt::Display for PlexusError {
@@ -47,6 +76,20 @@ impl std::fmt::Display for PlexusError {
             PlexusError::ExecutionError(msg) => write!(f, "Execution error: {}", msg),
             PlexusError::HandleNotSupported(activation) => {
                 write!(f, "Handle resolution not supported by activation: {}", activation)
+            }
+            PlexusError::TransportError(kind) => match kind {
+                TransportErrorKind::ConnectionRefused { host, port } => {
+                    write!(f, "Connection refused to {}:{}", host, port)
+                }
+                TransportErrorKind::ConnectionTimeout { host, port } => {
+                    write!(f, "Connection timeout to {}:{}", host, port)
+                }
+                TransportErrorKind::ProtocolError { message } => {
+                    write!(f, "Protocol error: {}", message)
+                }
+                TransportErrorKind::NetworkError { message } => {
+                    write!(f, "Network error: {}", message)
+                }
             }
         }
     }

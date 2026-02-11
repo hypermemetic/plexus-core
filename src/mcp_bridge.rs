@@ -77,6 +77,9 @@ fn plexus_to_mcp_error(e: PlexusError) -> McpError {
         PlexusError::HandleNotSupported(activation) => {
             McpError::invalid_params(format!("Handle resolution not supported: {}", activation), None)
         }
+        PlexusError::TransportError(kind) => {
+            McpError::internal_error(format!("Transport error: {}", kind), None)
+        }
     }
 }
 

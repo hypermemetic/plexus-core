@@ -234,6 +234,34 @@ impl ServerHandler for PlexusMcpBridge {
                     }
                 }
 
+                PlexusStreamItem::Request {
+                    request_id,
+                    request_data: _,
+                    timeout_ms,
+                } => {
+                    // TODO(WS6): Implement bidirectional request handling
+                    // For now, log that request was skipped
+                    tracing::warn!(
+                        request_id = %request_id,
+                        timeout_ms = timeout_ms,
+                        "Bidirectional request received but MCP transport not yet implemented (WS6)"
+                    );
+
+                    // Log to client that bidirectional not supported yet
+                    let _ = ctx
+                        .peer
+                        .notify_logging_message(LoggingMessageNotificationParam {
+                            level: LoggingLevel::Warning,
+                            logger: Some(logger.clone()),
+                            data: json!({
+                                "type": "bidir_not_implemented",
+                                "message": "Bidirectional requests not yet supported over MCP transport",
+                                "request_id": request_id,
+                            }),
+                        })
+                        .await;
+                }
+
                 PlexusStreamItem::Done { .. } => {
                     break;
                 }

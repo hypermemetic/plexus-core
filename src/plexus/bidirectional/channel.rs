@@ -1,6 +1,52 @@
 //! Generic bidirectional channel implementation
 //!
-//! Provides type-safe server-to-client requests during streaming execution.
+//! This module provides [`BidirChannel`], the core primitive for server-to-client
+//! requests during streaming RPC execution. It enables interactive workflows
+//! where the server can request input from clients mid-stream.
+//!
+//! # Architecture
+//!
+//! ```text
+//! ┌─────────────┐                    ┌─────────────┐
+//! │   Server    │                    │   Client    │
+//! │ (Activation)│                    │ (TypeScript)│
+//! └──────┬──────┘                    └──────┬──────┘
+//!        │                                  │
+//!        │  ctx.confirm("Delete?")          │
+//!        │                                  │
+//!        ├──────────────────────────────────┤
+//!        │  PlexusStreamItem::Request       │
+//!        │  {type:"request", requestId:..}  │
+//!        ├─────────────────────────────────►│
+//!        │                                  │
+//!        │              ◄── User interaction
+//!        │                                  │
+//!        │◄─────────────────────────────────┤
+//!        │  _plexus_respond(requestId,      │
+//!        │    {type:"confirmed",value:true})│
+//!        │                                  │
+//!        │  returns Ok(true)                │
+//!        ▼                                  ▼
+//! ```
+//!
+//! # Transport Modes
+//!
+//! The channel supports two response routing modes:
+//!
+//! 1. **Global Registry** (default) - Responses routed through [`registry`](super::registry)
+//!    - Used for MCP transport (`_plexus_respond` tool)
+//!    - Works with any transport that can't maintain channel references
+//!
+//! 2. **Direct Mode** - Responses handled via `handle_response()` method
+//!    - Used for WebSocket transport
+//!    - Requires direct access to channel instance
+//!
+//! # Thread Safety
+//!
+//! `BidirChannel` is designed for concurrent use:
+//! - Multiple requests can be pending simultaneously
+//! - Thread-safe internal state via `Arc<Mutex<_>>`
+//! - Clone-friendly for passing to async tasks
 
 use std::collections::HashMap;
 use std::marker::PhantomData;
@@ -17,53 +63,111 @@ use super::registry::{register_pending_request, unregister_pending_request};
 use super::types::{BidirError, SelectOption, StandardRequest, StandardResponse};
 use crate::plexus::types::PlexusStreamItem;
 
-/// Generic bidirectional channel for type-safe server→client requests
+/// Generic bidirectional channel for type-safe server-to-client requests.
 ///
-/// This is the core primitive for bidirectional communication. Activations
-/// use this to request input from clients during stream execution.
+/// `BidirChannel` is the core primitive for bidirectional communication in Plexus RPC.
+/// It allows server-side code (activations) to request input from clients during
+/// stream execution, enabling interactive workflows.
 ///
 /// # Type Parameters
 ///
-/// * `Req` - The request type sent from server to client (must be serializable)
-/// * `Resp` - The response type sent from client to server (must be deserializable)
+/// * `Req` - Request type sent server→client. Must implement `Serialize + DeserializeOwned`.
+/// * `Resp` - Response type sent client→server. Must implement `Serialize + DeserializeOwned`.
 ///
-/// # Examples
+/// # Common Type Aliases
 ///
-/// ## Using StandardBidirChannel (type alias)
+/// For standard UI patterns, use [`StandardBidirChannel`]:
 ///
 /// ```rust,ignore
-/// use plexus_core::bidirectional::{StandardBidirChannel, BidirError};
+/// type StandardBidirChannel = BidirChannel<StandardRequest, StandardResponse>;
+/// ```
 ///
-/// async fn my_activation(ctx: &StandardBidirChannel) -> Result<(), BidirError> {
-///     // Simple confirmation
-///     if ctx.confirm("Delete this file?").await? {
-///         // proceed
-///     }
+/// # Creating Channels
 ///
-///     // Text input
-///     let name = ctx.prompt("Enter your name:").await?;
+/// Channels are typically created by the transport layer, not by activations directly.
+/// The `#[hub_method(bidirectional)]` macro injects the appropriate channel type.
 ///
-///     Ok(())
+/// ```rust,ignore
+/// // The macro generates this signature:
+/// async fn wizard(&self, ctx: &Arc<StandardBidirChannel>) -> impl Stream<Item = Event> { ... }
+/// ```
+///
+/// # Making Requests
+///
+/// ## Standard Patterns (via StandardBidirChannel)
+///
+/// ```rust,ignore
+/// // Yes/no confirmation
+/// if ctx.confirm("Delete file?").await? {
+///     // User said yes
+/// }
+///
+/// // Text input
+/// let name = ctx.prompt("Enter name:").await?;
+///
+/// // Selection
+/// let options = vec![
+///     SelectOption::new("dev", "Development"),
+///     SelectOption::new("prod", "Production"),
+/// ];
+/// let selected = ctx.select("Choose env:", options).await?;
+/// ```
+///
+/// ## Custom Types
+///
+/// ```rust,ignore
+/// // Define custom request/response
+/// #[derive(Serialize, Deserialize)]
+/// enum ImageReq { ChooseQuality { min: u8, max: u8 } }
+///
+/// #[derive(Serialize, Deserialize)]
+/// enum ImageResp { Quality(u8), Cancel }
+///
+/// // Use in activation
+/// async fn process(ctx: &BidirChannel<ImageReq, ImageResp>) {
+///     let quality = ctx.request(ImageReq::ChooseQuality { min: 50, max: 100 }).await?;
 /// }
 /// ```
 ///
-/// ## Using custom request/response types
+/// # Error Handling
+///
+/// Always handle [`BidirError::NotSupported`] for transports that don't support
+/// bidirectional communication:
 ///
 /// ```rust,ignore
-/// #[derive(Serialize, Deserialize)]
-/// enum MyRequest { Ask { question: String } }
-///
-/// #[derive(Serialize, Deserialize)]
-/// enum MyResponse { Answer { text: String } }
-///
-/// async fn my_activation(ctx: &BidirChannel<MyRequest, MyResponse>) -> Result<(), BidirError> {
-///     let resp = ctx.request(MyRequest::Ask { question: "What's your favorite color?" }).await?;
-///     match resp {
-///         MyResponse::Answer { text } => println!("You said: {}", text),
+/// match ctx.confirm("Proceed?").await {
+///     Ok(true) => { /* confirmed */ }
+///     Ok(false) => { /* declined */ }
+///     Err(BidirError::NotSupported) => {
+///         // Non-interactive transport - use safe default
 ///     }
-///     Ok(())
+///     Err(BidirError::Cancelled) => {
+///         // User cancelled
+///     }
+///     Err(e) => {
+///         // Other error
+///     }
 /// }
 /// ```
+///
+/// # Timeouts
+///
+/// Default timeout is 30 seconds. Use `request_with_timeout` for custom timeouts:
+///
+/// ```rust,ignore
+/// use std::time::Duration;
+///
+/// // Quick timeout for automated scenarios
+/// ctx.request_with_timeout(req, Duration::from_secs(10)).await?;
+///
+/// // Extended timeout for complex decisions
+/// ctx.request_with_timeout(req, Duration::from_secs(120)).await?;
+/// ```
+///
+/// # Thread Safety
+///
+/// `BidirChannel` uses `Arc<Mutex<_>>` internally and is safe to share across tasks.
+/// Multiple requests can be pending simultaneously.
 pub struct BidirChannel<Req, Resp>
 where
     Req: Serialize + DeserializeOwned + Send + 'static,
@@ -93,7 +197,41 @@ where
     _phantom_req: PhantomData<Req>,
 }
 
-/// Type alias for standard interactive UI patterns
+/// Type alias for standard interactive UI patterns.
+///
+/// `StandardBidirChannel` provides convenient methods for common interactions:
+///
+/// - [`confirm()`](Self::confirm) - Yes/no confirmation
+/// - [`prompt()`](Self::prompt) - Text input
+/// - [`select()`](Self::select) - Selection from options
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use plexus_core::plexus::bidirectional::{StandardBidirChannel, SelectOption};
+///
+/// async fn wizard(ctx: &StandardBidirChannel) {
+///     // Step 1: Get name
+///     let name = ctx.prompt("Enter project name:").await?;
+///
+///     // Step 2: Select template
+///     let templates = vec![
+///         SelectOption::new("minimal", "Minimal"),
+///         SelectOption::new("full", "Full Featured"),
+///     ];
+///     let template = ctx.select("Choose template:", templates).await?;
+///
+///     // Step 3: Confirm creation
+///     if ctx.confirm(&format!("Create '{}' with {} template?", name, template[0])).await? {
+///         // Create project
+///     }
+/// }
+/// ```
+///
+/// # Transport Requirements
+///
+/// The underlying transport must support bidirectional communication.
+/// If not, all methods return `Err(BidirError::NotSupported)`.
 pub type StandardBidirChannel = BidirChannel<StandardRequest, StandardResponse>;
 
 impl<Req, Resp> BidirChannel<Req, Resp>

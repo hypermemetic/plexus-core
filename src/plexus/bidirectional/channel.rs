@@ -13,6 +13,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::time::timeout;
 use uuid::Uuid;
 
+use super::registry::{register_pending_request, unregister_pending_request};
 use super::types::{BidirError, SelectOption, StandardRequest, StandardResponse};
 use crate::plexus::types::PlexusStreamItem;
 
@@ -78,6 +79,10 @@ where
     /// Whether bidirectional communication is supported by transport
     bidirectional_supported: bool,
 
+    /// Whether to use global registry for response routing (for MCP transport)
+    /// When true, responses come through the global registry instead of handle_response()
+    use_global_registry: bool,
+
     /// Provenance path (for debugging/logging)
     provenance: Vec<String>,
 
@@ -97,6 +102,12 @@ where
     Resp: Serialize + DeserializeOwned + Send + 'static,
 {
     /// Create a new bidirectional channel
+    ///
+    /// By default, uses the global response registry which works with all transport types:
+    /// - MCP: Responses come through `_plexus_respond` tool → global registry
+    /// - WebSocket: Responses can also use global registry via `handle_pending_response()`
+    ///
+    /// Use `new_direct()` if you need direct response handling (for testing or specific transports).
     pub fn new(
         stream_tx: mpsc::Sender<PlexusStreamItem>,
         bidirectional_supported: bool,
@@ -107,6 +118,28 @@ where
             stream_tx,
             pending: Arc::new(Mutex::new(HashMap::new())),
             bidirectional_supported,
+            use_global_registry: true, // Use global registry by default for transport compatibility
+            provenance,
+            plexus_hash,
+            _phantom_req: PhantomData,
+        }
+    }
+
+    /// Create a bidirectional channel that uses direct response handling
+    ///
+    /// Responses must be delivered via `handle_response()` method on this channel instance.
+    /// Use this for testing or when you have direct access to the channel for responses.
+    pub fn new_direct(
+        stream_tx: mpsc::Sender<PlexusStreamItem>,
+        bidirectional_supported: bool,
+        provenance: Vec<String>,
+        plexus_hash: String,
+    ) -> Self {
+        Self {
+            stream_tx,
+            pending: Arc::new(Mutex::new(HashMap::new())),
+            bidirectional_supported,
+            use_global_registry: false,
             provenance,
             plexus_hash,
             _phantom_req: PhantomData,
@@ -140,18 +173,38 @@ where
         // Generate unique request ID
         let request_id = Uuid::new_v4().to_string();
 
-        // Create oneshot channel for response
-        let (tx, rx) = oneshot::channel();
-
-        // Register pending request
-        self.pending.lock().unwrap().insert(request_id.clone(), tx);
-
         // Serialize request
         let request_data = serde_json::to_value(&req)
             .map_err(|e| BidirError::Serialization(e.to_string()))?;
 
-        // Send Request stream item
         let timeout_ms = timeout_duration.as_millis() as u64;
+
+        if self.use_global_registry {
+            // Use global registry for response routing (MCP transport)
+            self.request_via_registry(request_id, request_data, timeout_duration, timeout_ms)
+                .await
+        } else {
+            // Use internal pending map (WebSocket/direct transport)
+            self.request_direct(request_id, request_data, timeout_duration, timeout_ms)
+                .await
+        }
+    }
+
+    /// Request using internal pending map (for direct transports like WebSocket)
+    async fn request_direct(
+        &self,
+        request_id: String,
+        request_data: Value,
+        timeout_duration: Duration,
+        timeout_ms: u64,
+    ) -> Result<Resp, BidirError> {
+        // Create oneshot channel for response
+        let (tx, rx) = oneshot::channel();
+
+        // Register pending request in internal map
+        self.pending.lock().unwrap().insert(request_id.clone(), tx);
+
+        // Send Request stream item
         self.stream_tx
             .send(PlexusStreamItem::request(
                 request_id.clone(),
@@ -172,6 +225,57 @@ where
             Err(_) => {
                 // Timeout
                 self.pending.lock().unwrap().remove(&request_id);
+                Err(BidirError::Timeout(timeout_ms))
+            }
+        }
+    }
+
+    /// Request using global registry (for MCP transport via _plexus_respond tool)
+    async fn request_via_registry(
+        &self,
+        request_id: String,
+        request_data: Value,
+        timeout_duration: Duration,
+        timeout_ms: u64,
+    ) -> Result<Resp, BidirError> {
+        // Create oneshot channel for Value response (type-erased)
+        let (tx, rx) = oneshot::channel::<Value>();
+
+        // Register in global registry
+        register_pending_request(request_id.clone(), tx);
+
+        // Send Request stream item
+        if let Err(e) = self
+            .stream_tx
+            .send(PlexusStreamItem::request(
+                request_id.clone(),
+                request_data,
+                timeout_ms,
+            ))
+            .await
+        {
+            // Clean up on failure
+            unregister_pending_request(&request_id);
+            return Err(BidirError::Transport(format!("Failed to send request: {}", e)));
+        }
+
+        // Wait for response (or timeout)
+        match timeout(timeout_duration, rx).await {
+            Ok(Ok(value)) => {
+                // Deserialize Value to typed response
+                serde_json::from_value(value).map_err(|e| BidirError::TypeMismatch {
+                    expected: std::any::type_name::<Resp>().to_string(),
+                    got: e.to_string(),
+                })
+            }
+            Ok(Err(_)) => {
+                // Channel closed before response
+                unregister_pending_request(&request_id);
+                Err(BidirError::ChannelClosed)
+            }
+            Err(_) => {
+                // Timeout - clean up from registry
+                unregister_pending_request(&request_id);
                 Err(BidirError::Timeout(timeout_ms))
             }
         }
@@ -382,7 +486,7 @@ mod tests {
     async fn test_bidir_channel_not_supported() {
         let (tx, _rx) = mpsc::channel(32);
         let channel: BidirChannel<StandardRequest, StandardResponse> =
-            BidirChannel::new(tx, false, vec!["test".into()], "hash".into());
+            BidirChannel::new_direct(tx, false, vec!["test".into()], "hash".into());
 
         let result = channel.confirm("Test?").await;
         assert!(matches!(result, Err(BidirError::NotSupported)));
@@ -391,7 +495,7 @@ mod tests {
     #[tokio::test]
     async fn test_bidir_request_response() {
         let (tx, mut rx) = mpsc::channel(32);
-        let channel: Arc<BidirChannel<StandardRequest, StandardResponse>> = Arc::new(BidirChannel::new(
+        let channel: Arc<BidirChannel<StandardRequest, StandardResponse>> = Arc::new(BidirChannel::new_direct(
             tx,
             true,
             vec!["test".into()],
@@ -439,7 +543,7 @@ mod tests {
     #[tokio::test]
     async fn test_convenience_methods() {
         let (tx, mut rx) = mpsc::channel(32);
-        let channel: Arc<StandardBidirChannel> = Arc::new(BidirChannel::new(
+        let channel: Arc<StandardBidirChannel> = Arc::new(BidirChannel::new_direct(
             tx,
             true,
             vec!["test".into()],
@@ -466,7 +570,7 @@ mod tests {
     async fn test_timeout() {
         let (tx, _rx) = mpsc::channel(32);
         let channel: BidirChannel<StandardRequest, StandardResponse> =
-            BidirChannel::new(tx, true, vec!["test".into()], "hash".into());
+            BidirChannel::new_direct(tx, true, vec!["test".into()], "hash".into());
 
         let result = channel
             .request_with_timeout(
@@ -484,7 +588,7 @@ mod tests {
     #[tokio::test]
     async fn test_fallback() {
         let (tx, _rx) = mpsc::channel(32);
-        let channel = Arc::new(BidirChannel::new(
+        let channel = Arc::new(BidirChannel::new_direct(
             tx,
             false, // not supported
             vec!["test".into()],

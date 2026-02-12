@@ -14,8 +14,9 @@ use rmcp::{
 };
 use serde_json::json;
 
-use crate::plexus::{DynamicHub, PlexusError, PluginSchema};
+use crate::plexus::bidirectional::{handle_pending_response, BidirError};
 use crate::plexus::types::PlexusStreamItem;
+use crate::plexus::{DynamicHub, PlexusError, PluginSchema};
 
 // =============================================================================
 // Schema Transformation
@@ -26,7 +27,7 @@ use crate::plexus::types::PlexusStreamItem;
 /// MCP requires all tool inputSchema to have "type": "object" at root.
 /// schemars may produce schemas without this (e.g., for unit types).
 fn schemas_to_rmcp_tools(schemas: Vec<PluginSchema>) -> Vec<Tool> {
-    schemas
+    let mut tools: Vec<Tool> = schemas
         .into_iter()
         .flat_map(|activation| {
             let namespace = activation.namespace.clone();
@@ -56,7 +57,47 @@ fn schemas_to_rmcp_tools(schemas: Vec<PluginSchema>) -> Vec<Tool> {
                 Tool::new(name, description, input_schema)
             })
         })
-        .collect()
+        .collect();
+
+    // Add the _plexus_respond tool for bidirectional communication
+    tools.push(create_plexus_respond_tool());
+
+    tools
+}
+
+/// Create the _plexus_respond tool for bidirectional communication
+///
+/// This tool allows MCP clients to respond to bidirectional requests
+/// sent via logging notifications (type: "request").
+fn create_plexus_respond_tool() -> Tool {
+    let schema = Arc::new(serde_json::Map::from_iter([
+        ("type".to_string(), json!("object")),
+        (
+            "properties".to_string(),
+            json!({
+                "request_id": {
+                    "type": "string",
+                    "description": "The request_id from the bidirectional request notification"
+                },
+                "response_data": {
+                    "description": "The response data to send back to the server"
+                }
+            }),
+        ),
+        (
+            "required".to_string(),
+            json!(["request_id", "response_data"]),
+        ),
+    ]));
+
+    Tool::new(
+        "_plexus_respond".to_string(),
+        "Respond to a bidirectional request from the server. \
+         When you receive a logging notification with type 'request', \
+         use this tool to send your response back."
+            .to_string(),
+        schema,
+    )
 }
 
 // =============================================================================
@@ -96,6 +137,63 @@ pub struct PlexusMcpBridge {
 impl PlexusMcpBridge {
     pub fn new(hub: Arc<DynamicHub>) -> Self {
         Self { hub }
+    }
+
+    /// Handle the _plexus_respond tool call
+    ///
+    /// Routes the response back to the waiting BidirChannel via the global registry.
+    async fn handle_plexus_respond(
+        &self,
+        request: CallToolRequestParam,
+    ) -> Result<CallToolResult, McpError> {
+        let arguments = request
+            .arguments
+            .map(serde_json::Value::Object)
+            .unwrap_or(json!({}));
+
+        // Extract request_id and response_data
+        let request_id = arguments
+            .get("request_id")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| McpError::invalid_params("Missing required parameter: request_id", None))?
+            .to_string();
+
+        let response_data = arguments
+            .get("response_data")
+            .cloned()
+            .ok_or_else(|| {
+                McpError::invalid_params("Missing required parameter: response_data", None)
+            })?;
+
+        tracing::debug!(
+            request_id = %request_id,
+            "Handling _plexus_respond"
+        );
+
+        // Forward response through global registry
+        match handle_pending_response(&request_id, response_data) {
+            Ok(()) => Ok(CallToolResult::success(vec![Content::text(
+                "Response delivered successfully",
+            )])),
+            Err(BidirError::UnknownRequest) => {
+                tracing::warn!(request_id = %request_id, "Unknown request ID in _plexus_respond");
+                Err(McpError::invalid_params(
+                    format!("Unknown request ID: {}. The request may have timed out or been cancelled.", request_id),
+                    None,
+                ))
+            }
+            Err(BidirError::ChannelClosed) => {
+                tracing::warn!(request_id = %request_id, "Channel closed in _plexus_respond");
+                Err(McpError::internal_error(
+                    "Response channel was closed (request may have timed out)",
+                    None,
+                ))
+            }
+            Err(e) => {
+                tracing::error!(request_id = %request_id, error = ?e, "Error in _plexus_respond");
+                Err(McpError::internal_error(format!("Failed to deliver response: {}", e), None))
+            }
+        }
     }
 }
 
@@ -137,6 +235,12 @@ impl ServerHandler for PlexusMcpBridge {
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         let method_name = &request.name;
+
+        // Handle _plexus_respond tool specially
+        if method_name == "_plexus_respond" {
+            return self.handle_plexus_respond(request).await;
+        }
+
         let arguments = request
             .arguments
             .map(serde_json::Value::Object)
@@ -236,27 +340,27 @@ impl ServerHandler for PlexusMcpBridge {
 
                 PlexusStreamItem::Request {
                     request_id,
-                    request_data: _,
+                    request_data,
                     timeout_ms,
                 } => {
-                    // TODO(WS6): Implement bidirectional request handling
-                    // For now, log that request was skipped
-                    tracing::warn!(
+                    // Send bidirectional request as logging notification
+                    // Client responds via _plexus_respond tool call
+                    tracing::debug!(
                         request_id = %request_id,
                         timeout_ms = timeout_ms,
-                        "Bidirectional request received but MCP transport not yet implemented (WS6)"
+                        "Sending bidirectional request notification"
                     );
 
-                    // Log to client that bidirectional not supported yet
                     let _ = ctx
                         .peer
                         .notify_logging_message(LoggingMessageNotificationParam {
-                            level: LoggingLevel::Warning,
-                            logger: Some(logger.clone()),
+                            level: LoggingLevel::Info,
+                            logger: Some("plexus.bidir".into()),
                             data: json!({
-                                "type": "bidir_not_implemented",
-                                "message": "Bidirectional requests not yet supported over MCP transport",
+                                "type": "request",
                                 "request_id": request_id,
+                                "request_data": request_data,
+                                "timeout_ms": timeout_ms,
                             }),
                         })
                         .await;

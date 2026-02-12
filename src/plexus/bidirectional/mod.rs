@@ -75,11 +75,16 @@
 
 pub mod channel;
 pub mod helpers;
+pub mod registry;
 pub mod types;
 
 pub use channel::{BidirChannel, BidirWithFallback, StandardBidirChannel};
 pub use helpers::{
     TimeoutConfig, auto_confirm_channel, auto_respond_channel, bidir_error_message,
     create_test_bidir_channel, create_test_standard_channel,
+};
+pub use registry::{
+    handle_pending_response, is_request_pending, pending_count, register_pending_request,
+    unregister_pending_request,
 };
 pub use types::{BidirError, SelectOption, StandardRequest, StandardResponse};

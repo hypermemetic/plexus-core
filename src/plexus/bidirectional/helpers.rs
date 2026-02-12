@@ -137,7 +137,7 @@ where
     Resp: Serialize + DeserializeOwned + Send + 'static,
 {
     let (tx, rx) = mpsc::channel(32);
-    let channel = Arc::new(BidirChannel::new(
+    let channel = Arc::new(BidirChannel::new_direct(
         tx,
         true, // bidirectional_supported
         vec!["test".into()],
@@ -200,7 +200,7 @@ where
     Resp: Serialize + DeserializeOwned + Send + Sync + 'static,
 {
     let (tx, mut rx) = mpsc::channel::<PlexusStreamItem>(32);
-    let channel = Arc::new(BidirChannel::new(
+    let channel = Arc::new(BidirChannel::new_direct(
         tx,
         true, // bidirectional_supported
         vec!["test".into()],

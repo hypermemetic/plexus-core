@@ -74,7 +74,7 @@ async fn test_bidir_channel_direct_flow() {
         channel
             .handle_response(
                 request_id,
-                serde_json::to_value(&StandardResponse::Confirmed(true)).unwrap(),
+                serde_json::to_value(&StandardResponse::Confirmed { value: true }).unwrap(),
             )
             .unwrap();
     }
@@ -96,7 +96,7 @@ async fn test_bidir_channel_prompt_flow() {
         channel
             .handle_response(
                 request_id,
-                serde_json::to_value(&StandardResponse::Text("Alice".into())).unwrap(),
+                serde_json::to_value(&StandardResponse::Text { value: "Alice".into() }).unwrap(),
             )
             .unwrap();
     }
@@ -123,7 +123,7 @@ async fn test_bidir_channel_select_flow() {
         channel
             .handle_response(
                 request_id,
-                serde_json::to_value(&StandardResponse::Selected(vec!["b".into()])).unwrap(),
+                serde_json::to_value(&StandardResponse::Selected { values: vec!["b".into()] }).unwrap(),
             )
             .unwrap();
     }
@@ -340,7 +340,7 @@ async fn test_fallback_when_not_supported() {
         })
         .await;
 
-    assert_eq!(resp, StandardResponse::Confirmed(true));
+    assert_eq!(resp, StandardResponse::Confirmed { value: true });
 }
 
 #[tokio::test]
@@ -358,7 +358,7 @@ async fn test_fallback_uses_default_value() {
         })
         .await;
 
-    assert_eq!(resp, StandardResponse::Confirmed(false));
+    assert_eq!(resp, StandardResponse::Confirmed { value: false });
 }
 
 #[tokio::test]
@@ -376,7 +376,7 @@ async fn test_fallback_prompt_uses_default() {
         })
         .await;
 
-    assert_eq!(resp, StandardResponse::Text("DefaultName".into()));
+    assert_eq!(resp, StandardResponse::Text { value: "DefaultName".into() });
 }
 
 #[tokio::test]
@@ -397,7 +397,7 @@ async fn test_fallback_select_uses_first_option() {
         })
         .await;
 
-    assert_eq!(resp, StandardResponse::Selected(vec!["first".into()]));
+    assert_eq!(resp, StandardResponse::Selected { values: vec!["first".into()] });
 }
 
 #[tokio::test]
@@ -407,9 +407,9 @@ async fn test_fallback_custom_function() {
 
     let fallback = BidirWithFallback::new(channel, |req: &StandardRequest| {
         match req {
-            StandardRequest::Confirm { .. } => StandardResponse::Confirmed(false), // Always decline
-            StandardRequest::Prompt { .. } => StandardResponse::Text("custom".into()),
-            StandardRequest::Select { .. } => StandardResponse::Selected(vec!["custom".into()]),
+            StandardRequest::Confirm { .. } => StandardResponse::Confirmed { value: false }, // Always decline
+            StandardRequest::Prompt { .. } => StandardResponse::Text { value: "custom".into() },
+            StandardRequest::Select { .. } => StandardResponse::Selected { values: vec!["custom".into()] },
         }
     });
 
@@ -420,7 +420,7 @@ async fn test_fallback_custom_function() {
         })
         .await;
 
-    assert_eq!(resp, StandardResponse::Confirmed(false));
+    assert_eq!(resp, StandardResponse::Confirmed { value: false });
 }
 
 // =============================================================================
@@ -444,11 +444,11 @@ async fn test_create_test_standard_channel() {
 #[tokio::test]
 async fn test_auto_respond_channel() {
     let ctx = auto_respond_channel(|req: &StandardRequest| match req {
-        StandardRequest::Confirm { .. } => StandardResponse::Confirmed(true),
-        StandardRequest::Prompt { message, .. } => StandardResponse::Text(message.clone()),
-        StandardRequest::Select { options, .. } => {
-            StandardResponse::Selected(vec![options[0].value.clone()])
-        }
+        StandardRequest::Confirm { .. } => StandardResponse::Confirmed { value: true },
+        StandardRequest::Prompt { message, .. } => StandardResponse::Text { value: message.clone() },
+        StandardRequest::Select { options, .. } => StandardResponse::Selected {
+            values: vec![options[0].value.clone()],
+        },
     });
 
     assert_eq!(ctx.confirm("Test?").await.unwrap(), true);
@@ -495,7 +495,7 @@ async fn test_auto_confirm_channel_respects_default() {
     });
 
     let result = handle.await.unwrap().unwrap();
-    assert_eq!(result, StandardResponse::Confirmed(false));
+    assert_eq!(result, StandardResponse::Confirmed { value: false });
 }
 
 // =============================================================================
@@ -691,9 +691,11 @@ fn test_standard_request_select_serialization() {
 
 #[test]
 fn test_standard_response_confirmed_serialization() {
-    let resp = StandardResponse::Confirmed(true);
+    let resp = StandardResponse::Confirmed { value: true };
     let json = serde_json::to_value(&resp).unwrap();
-    assert_eq!(json["confirmed"], true);
+    // Internally tagged: { "type": "confirmed", "value": true }
+    assert_eq!(json["type"], "confirmed");
+    assert_eq!(json["value"], true);
 
     let decoded: StandardResponse = serde_json::from_value(json).unwrap();
     assert_eq!(resp, decoded);
@@ -701,27 +703,31 @@ fn test_standard_response_confirmed_serialization() {
 
 #[test]
 fn test_standard_response_text_serialization() {
-    let resp = StandardResponse::Text("Hello".into());
+    let resp = StandardResponse::Text { value: "Hello".into() };
     let json = serde_json::to_value(&resp).unwrap();
-    assert_eq!(json["text"], "Hello");
+    // Internally tagged: { "type": "text", "value": "Hello" }
+    assert_eq!(json["type"], "text");
+    assert_eq!(json["value"], "Hello");
 }
 
 #[test]
 fn test_standard_response_selected_serialization() {
-    let resp = StandardResponse::Selected(vec!["a".into(), "b".into()]);
+    let resp = StandardResponse::Selected { values: vec!["a".into(), "b".into()] };
     let json = serde_json::to_value(&resp).unwrap();
-
-    let selected = json["selected"].as_array().unwrap();
-    assert_eq!(selected.len(), 2);
-    assert_eq!(selected[0], "a");
-    assert_eq!(selected[1], "b");
+    // Internally tagged: { "type": "selected", "values": ["a", "b"] }
+    assert_eq!(json["type"], "selected");
+    let values = json["values"].as_array().unwrap();
+    assert_eq!(values.len(), 2);
+    assert_eq!(values[0], "a");
+    assert_eq!(values[1], "b");
 }
 
 #[test]
 fn test_standard_response_cancelled_serialization() {
     let resp = StandardResponse::Cancelled;
     let json = serde_json::to_value(&resp).unwrap();
-    assert_eq!(json, "cancelled");
+    // Internally tagged unit variant: { "type": "cancelled" }
+    assert_eq!(json["type"], "cancelled");
 
     let decoded: StandardResponse = serde_json::from_value(json).unwrap();
     assert_eq!(resp, decoded);
@@ -849,10 +855,11 @@ fn test_plexus_stream_item_request_serialization() {
 
     let json = serde_json::to_value(&item).unwrap();
     assert_eq!(json["type"], "request");
-    assert_eq!(json["request_id"], "uuid-here");
-    assert_eq!(json["timeout_ms"], 30000);
-    assert_eq!(json["request_data"]["type"], "confirm");
-    assert_eq!(json["request_data"]["message"], "Test?");
+    // Request fields are camelCase for JavaScript/TypeScript compatibility
+    assert_eq!(json["requestId"], "uuid-here");
+    assert_eq!(json["timeoutMs"], 30000);
+    assert_eq!(json["requestData"]["type"], "confirm");
+    assert_eq!(json["requestData"]["message"], "Test?");
 }
 
 #[test]

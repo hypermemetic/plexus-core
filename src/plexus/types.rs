@@ -81,7 +81,8 @@ pub enum PlexusStreamItem {
     ///
     /// Server can ask client for input during stream execution.
     /// Client must respond via transport-specific mechanism
-    /// (MCP: _plexus_respond tool, WebSocket: plexus_respond RPC).
+    /// (MCP: _plexus_respond tool, WebSocket: plexus.respond RPC).
+    #[serde(rename_all = "camelCase")]
     Request {
         /// Unique identifier for correlating response
         request_id: String,

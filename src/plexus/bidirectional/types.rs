@@ -320,29 +320,34 @@ pub enum StandardRequest {
 /// { "cancelled": null }
 /// ```
 ///
-/// **Note for TypeScript clients**: The generated types use a tagged format:
-/// ```typescript
-/// // TypeScript format
-/// { type: 'confirmed', value: true }
-/// { type: 'text', value: 'user-input' }
-/// { type: 'selected', values: ['dev'] }
-/// { type: 'cancelled' }
+/// Wire format uses internally-tagged JSON for consistency with TypeScript clients:
+/// ```json
+/// { "type": "confirmed", "value": true }
+/// { "type": "text", "value": "user-input" }
+/// { "type": "selected", "values": ["dev"] }
+/// { "type": "cancelled" }
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
-#[serde(rename_all = "snake_case")]
+#[serde(tag = "type", rename_all = "snake_case")]
 pub enum StandardResponse {
     /// User confirmed (true) or declined (false).
     ///
     /// Response to `StandardRequest::Confirm`.
-    /// - `Confirmed(true)` = user said yes
-    /// - `Confirmed(false)` = user said no
-    Confirmed(bool),
+    /// - `value: true` = user said yes
+    /// - `value: false` = user said no
+    Confirmed {
+        /// Whether the user confirmed (true) or declined (false)
+        value: bool,
+    },
 
     /// User entered text.
     ///
     /// Response to `StandardRequest::Prompt`.
     /// May be empty string if user submitted without entering text.
-    Text(String),
+    Text {
+        /// The text entered by the user
+        value: String,
+    },
 
     /// User selected one or more options (by value).
     ///
@@ -351,7 +356,10 @@ pub enum StandardResponse {
     ///
     /// - For single-select: vector with exactly one element
     /// - For multi-select: vector with zero or more elements
-    Selected(Vec<String>),
+    Selected {
+        /// The values of selected options
+        values: Vec<String>,
+    },
 
     /// User cancelled the request.
     ///
@@ -475,15 +483,16 @@ mod tests {
 
     #[test]
     fn test_standard_response_serialization() {
-        let resp = StandardResponse::Confirmed(true);
+        let resp = StandardResponse::Confirmed { value: true };
 
         let json = serde_json::to_value(&resp).unwrap();
-        // Externally tagged: { "confirmed": true }
-        assert_eq!(json["confirmed"], true);
+        // Internally tagged: { "type": "confirmed", "value": true }
+        assert_eq!(json["type"], "confirmed");
+        assert_eq!(json["value"], true);
 
         // Test round-trip
         let roundtrip: StandardResponse = serde_json::from_value(json).unwrap();
-        assert_eq!(roundtrip, StandardResponse::Confirmed(true));
+        assert_eq!(roundtrip, StandardResponse::Confirmed { value: true });
     }
 
     #[test]

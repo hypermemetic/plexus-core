@@ -481,7 +481,7 @@ impl BidirChannel<StandardRequest, StandardResponse> {
             .await?;
 
         match resp {
-            StandardResponse::Confirmed(b) => Ok(b),
+            StandardResponse::Confirmed { value } => Ok(value),
             StandardResponse::Cancelled => Err(BidirError::Cancelled),
             _ => Err(BidirError::TypeMismatch {
                 expected: "Confirmed".into(),
@@ -507,7 +507,7 @@ impl BidirChannel<StandardRequest, StandardResponse> {
             .await?;
 
         match resp {
-            StandardResponse::Text(s) => Ok(s),
+            StandardResponse::Text { value } => Ok(value),
             StandardResponse::Cancelled => Err(BidirError::Cancelled),
             _ => Err(BidirError::TypeMismatch {
                 expected: "Text".into(),
@@ -541,7 +541,7 @@ impl BidirChannel<StandardRequest, StandardResponse> {
             .await?;
 
         match resp {
-            StandardResponse::Selected(s) => Ok(s),
+            StandardResponse::Selected { values } => Ok(values),
             StandardResponse::Cancelled => Err(BidirError::Cancelled),
             _ => Err(BidirError::TypeMismatch {
                 expected: "Selected".into(),
@@ -602,16 +602,15 @@ impl BidirWithFallback<StandardRequest, StandardResponse> {
         channel: Arc<BidirChannel<StandardRequest, StandardResponse>>,
     ) -> Self {
         Self::new(channel, |req| match req {
-            StandardRequest::Confirm { default, .. } => {
-                StandardResponse::Confirmed(default.unwrap_or(true))
-            }
-            StandardRequest::Prompt { default, .. } => {
-                StandardResponse::Text(default.clone().unwrap_or_default())
-            }
-            StandardRequest::Select { options, .. } => StandardResponse::Selected(vec![options
-                .first()
-                .map(|o| o.value.clone())
-                .unwrap_or_default()]),
+            StandardRequest::Confirm { default, .. } => StandardResponse::Confirmed {
+                value: default.unwrap_or(true),
+            },
+            StandardRequest::Prompt { default, .. } => StandardResponse::Text {
+                value: default.clone().unwrap_or_default(),
+            },
+            StandardRequest::Select { options, .. } => StandardResponse::Selected {
+                values: vec![options.first().map(|o| o.value.clone()).unwrap_or_default()],
+            },
         })
     }
 }
@@ -666,7 +665,7 @@ mod tests {
             channel
                 .handle_response(
                     request_id,
-                    serde_json::to_value(&StandardResponse::Confirmed(true)).unwrap(),
+                    serde_json::to_value(&StandardResponse::Confirmed { value: true }).unwrap(),
                 )
                 .unwrap();
         } else {
@@ -675,7 +674,7 @@ mod tests {
 
         // Verify response received
         let result: StandardResponse = handle.await.unwrap().unwrap();
-        assert_eq!(result, StandardResponse::Confirmed(true));
+        assert_eq!(result, StandardResponse::Confirmed { value: true });
     }
 
     #[tokio::test]
@@ -696,7 +695,7 @@ mod tests {
             channel
                 .handle_response(
                     request_id,
-                    serde_json::to_value(&StandardResponse::Confirmed(true)).unwrap(),
+                    serde_json::to_value(&StandardResponse::Confirmed { value: true }).unwrap(),
                 )
                 .unwrap();
         }
@@ -742,6 +741,6 @@ mod tests {
             })
             .await;
 
-        assert_eq!(resp, StandardResponse::Confirmed(false));
+        assert_eq!(resp, StandardResponse::Confirmed { value: false });
     }
 }

@@ -190,10 +190,10 @@
 //! async fn test_wizard_flow() {
 //!     let ctx = auto_respond_channel(|req: &StandardRequest| {
 //!         match req {
-//!             StandardRequest::Confirm { .. } => StandardResponse::Confirmed(true),
-//!             StandardRequest::Prompt { .. } => StandardResponse::Text("test-value".into()),
+//!             StandardRequest::Confirm { .. } => StandardResponse::Confirmed { value: true },
+//!             StandardRequest::Prompt { .. } => StandardResponse::Text { value: "test-value".into() },
 //!             StandardRequest::Select { options, .. } => {
-//!                 StandardResponse::Selected(vec![options[0].value.clone()])
+//!                 StandardResponse::Selected { values: vec![options[0].value.clone()] }
 //!             }
 //!         }
 //!     });

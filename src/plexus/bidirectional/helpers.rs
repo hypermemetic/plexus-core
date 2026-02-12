@@ -182,9 +182,9 @@ pub fn create_test_standard_channel() -> (
 /// async fn test_with_auto_response() {
 ///     let ctx = auto_respond_channel(|req: &StandardRequest| {
 ///         match req {
-///             StandardRequest::Confirm { .. } => StandardResponse::Confirmed(true),
-///             StandardRequest::Prompt { .. } => StandardResponse::Text("test".into()),
-///             StandardRequest::Select { .. } => StandardResponse::Selected(vec!["opt1".into()]),
+///             StandardRequest::Confirm { .. } => StandardResponse::Confirmed { value: true },
+///             StandardRequest::Prompt { .. } => StandardResponse::Text { value: "test".into() },
+///             StandardRequest::Select { .. } => StandardResponse::Selected { values: vec!["opt1".into()] },
 ///         }
 ///     });
 ///
@@ -252,16 +252,15 @@ where
 /// ```
 pub fn auto_confirm_channel(confirm_value: bool) -> Arc<BidirChannel<StandardRequest, StandardResponse>> {
     auto_respond_channel(move |req: &StandardRequest| match req {
-        StandardRequest::Confirm { default, .. } => {
-            StandardResponse::Confirmed(default.unwrap_or(confirm_value))
-        }
-        StandardRequest::Prompt { default, .. } => {
-            StandardResponse::Text(default.clone().unwrap_or_default())
-        }
-        StandardRequest::Select { options, .. } => StandardResponse::Selected(vec![options
-            .first()
-            .map(|o| o.value.clone())
-            .unwrap_or_default()]),
+        StandardRequest::Confirm { default, .. } => StandardResponse::Confirmed {
+            value: default.unwrap_or(confirm_value),
+        },
+        StandardRequest::Prompt { default, .. } => StandardResponse::Text {
+            value: default.clone().unwrap_or_default(),
+        },
+        StandardRequest::Select { options, .. } => StandardResponse::Selected {
+            values: vec![options.first().map(|o| o.value.clone()).unwrap_or_default()],
+        },
     })
 }
 
@@ -346,11 +345,11 @@ mod tests {
     #[tokio::test]
     async fn test_auto_respond_channel() {
         let ctx = auto_respond_channel(|req: &StandardRequest| match req {
-            StandardRequest::Confirm { .. } => StandardResponse::Confirmed(true),
-            StandardRequest::Prompt { .. } => StandardResponse::Text("hello".into()),
-            StandardRequest::Select { options, .. } => {
-                StandardResponse::Selected(vec![options[0].value.clone()])
-            }
+            StandardRequest::Confirm { .. } => StandardResponse::Confirmed { value: true },
+            StandardRequest::Prompt { .. } => StandardResponse::Text { value: "hello".into() },
+            StandardRequest::Select { options, .. } => StandardResponse::Selected {
+                values: vec![options[0].value.clone()],
+            },
         });
 
         // Test confirm

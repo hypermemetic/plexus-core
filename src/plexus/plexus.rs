@@ -979,6 +979,49 @@ impl DynamicHub {
             }
         )?;
 
+        // Register {ns}.respond method for WebSocket bidirectional responses
+        // This allows clients to respond to server-initiated requests (like confirmations/prompts)
+        let respond_method: &'static str = Box::leak(format!("{}.respond", ns).into_boxed_str());
+        module.register_async_method(respond_method, |params, _ctx, _ext| async move {
+            use super::bidirectional::{handle_pending_response, BidirError};
+
+            let p: RespondParams = params.parse()?;
+
+            tracing::debug!(
+                request_id = %p.request_id,
+                "Handling {}.respond via WebSocket",
+                "plexus"
+            );
+
+            match handle_pending_response(&p.request_id, p.response_data) {
+                Ok(()) => Ok(serde_json::json!({"success": true})),
+                Err(BidirError::UnknownRequest) => {
+                    tracing::warn!(request_id = %p.request_id, "Unknown request ID in respond");
+                    Err(jsonrpsee::types::ErrorObject::owned(
+                        -32602,
+                        format!("Unknown request ID: {}. The request may have timed out or been cancelled.", p.request_id),
+                        None::<()>,
+                    ))
+                }
+                Err(BidirError::ChannelClosed) => {
+                    tracing::warn!(request_id = %p.request_id, "Channel closed in respond");
+                    Err(jsonrpsee::types::ErrorObject::owned(
+                        -32000,
+                        "Response channel was closed (request may have timed out)",
+                        None::<()>,
+                    ))
+                }
+                Err(e) => {
+                    tracing::error!(request_id = %p.request_id, error = ?e, "Error in respond");
+                    Err(jsonrpsee::types::ErrorObject::owned(
+                        -32000,
+                        format!("Failed to deliver response: {}", e),
+                        None::<()>,
+                    ))
+                }
+            }
+        })?;
+
         // Register pending RPC methods from activations
         let pending = std::mem::take(&mut *hub.inner.pending_rpc.lock().unwrap());
         for factory in pending {
@@ -1001,6 +1044,13 @@ struct CallParams {
 #[derive(Debug, Default, serde::Deserialize)]
 struct SchemaParams {
     method: Option<String>,
+}
+
+/// Params for {ns}.respond (WebSocket bidirectional response)
+#[derive(Debug, serde::Deserialize)]
+struct RespondParams {
+    request_id: String,
+    response_data: Value,
 }
 
 /// Helper to pipe a PlexusStream to a subscription sink

@@ -14,7 +14,7 @@ pub mod schema;
 pub mod streaming;
 pub mod types;
 
-pub use bidirectional::{BidirError, SelectOption, StandardRequest, StandardResponse};
+pub use bidirectional::{BidirChannel, BidirError, SelectOption, StandardBidirChannel, StandardRequest, StandardResponse};
 pub use context::PlexusContext;
 #[deprecated(note = "Use GuidanceErrorType and GuidanceSuggestion from stream events instead")]
 pub use errors::{GuidedError, GuidedErrorData, TryRequest};

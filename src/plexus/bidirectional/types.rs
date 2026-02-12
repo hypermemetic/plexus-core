@@ -89,7 +89,7 @@ pub enum StandardRequest {
 
 /// Standard response types matching StandardRequest
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[serde(rename_all = "snake_case")]
 pub enum StandardResponse {
     /// User confirmed (true) or declined (false)
     Confirmed(bool),
@@ -157,8 +157,12 @@ mod tests {
         let resp = StandardResponse::Confirmed(true);
 
         let json = serde_json::to_value(&resp).unwrap();
-        assert_eq!(json["type"], "confirmed");
-        assert_eq!(json[0], true);
+        // Externally tagged: { "confirmed": true }
+        assert_eq!(json["confirmed"], true);
+
+        // Test round-trip
+        let roundtrip: StandardResponse = serde_json::from_value(json).unwrap();
+        assert_eq!(roundtrip, StandardResponse::Confirmed(true));
     }
 
     #[test]

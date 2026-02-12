@@ -73,8 +73,8 @@
 //! }
 //! ```
 
+pub mod channel;
 pub mod types;
 
-pub use types::{
-    BidirError, SelectOption, StandardRequest, StandardResponse,
-};
+pub use channel::{BidirChannel, BidirWithFallback, StandardBidirChannel};
+pub use types::{BidirError, SelectOption, StandardRequest, StandardResponse};

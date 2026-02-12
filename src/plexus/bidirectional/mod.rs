@@ -74,7 +74,12 @@
 //! ```
 
 pub mod channel;
+pub mod helpers;
 pub mod types;
 
 pub use channel::{BidirChannel, BidirWithFallback, StandardBidirChannel};
+pub use helpers::{
+    TimeoutConfig, auto_confirm_channel, auto_respond_channel, bidir_error_message,
+    create_test_bidir_channel, create_test_standard_channel,
+};
 pub use types::{BidirError, SelectOption, StandardRequest, StandardResponse};

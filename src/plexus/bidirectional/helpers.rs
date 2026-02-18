@@ -256,11 +256,17 @@ pub fn auto_confirm_channel(confirm_value: bool) -> Arc<BidirChannel<StandardReq
             value: default.unwrap_or(confirm_value),
         },
         StandardRequest::Prompt { default, .. } => StandardResponse::Text {
-            value: default.clone().unwrap_or_default(),
+            value: default
+                .clone()
+                .unwrap_or(serde_json::Value::String(String::new())),
         },
         StandardRequest::Select { options, .. } => StandardResponse::Selected {
-            values: vec![options.first().map(|o| o.value.clone()).unwrap_or_default()],
+            values: vec![options
+                .first()
+                .map(|o| o.value.clone())
+                .unwrap_or(serde_json::Value::String(String::new()))],
         },
+        StandardRequest::Custom { data } => StandardResponse::Custom { data: data.clone() },
     })
 }
 
@@ -346,10 +352,13 @@ mod tests {
     async fn test_auto_respond_channel() {
         let ctx = auto_respond_channel(|req: &StandardRequest| match req {
             StandardRequest::Confirm { .. } => StandardResponse::Confirmed { value: true },
-            StandardRequest::Prompt { .. } => StandardResponse::Text { value: "hello".into() },
+            StandardRequest::Prompt { .. } => StandardResponse::Text {
+                value: serde_json::Value::String("hello".into()),
+            },
             StandardRequest::Select { options, .. } => StandardResponse::Selected {
                 values: vec![options[0].value.clone()],
             },
+            StandardRequest::Custom { data } => StandardResponse::Custom { data: data.clone() },
         });
 
         // Test confirm

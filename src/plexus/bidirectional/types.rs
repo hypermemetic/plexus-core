@@ -21,7 +21,7 @@
 //! { "type": "confirm", "message": "Delete file?", "default": false }
 //!
 //! // StandardResponse::Confirmed
-//! { "confirmed": true }
+//! { "type": "confirmed", "value": true }
 //! ```
 //!
 //! # Error Handling
@@ -33,7 +33,7 @@
 //! - Type/serialization errors
 
 use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 /// Error types for bidirectional communication
 ///
@@ -161,6 +161,10 @@ pub enum BidirError {
 /// - **Confirm**: Yes/no questions before important actions
 /// - **Prompt**: Free-form text input from the user
 /// - **Select**: Choose one or more options from a list
+/// - **Custom**: Domain-specific request payload
+///
+/// The type parameter `T` defaults to [`serde_json::Value`] for backwards compatibility.
+/// Use a custom type for domain-specific interactions.
 ///
 /// For domain-specific interactions (e.g., image quality selection, custom
 /// dialogs), define your own request/response enums and use
@@ -207,9 +211,20 @@ pub enum BidirError {
 /// | `confirm` | Yes/No buttons or checkbox |
 /// | `prompt` | Text input field |
 /// | `select` | Dropdown, radio buttons, or checkbox list |
+/// | `custom` | Application-defined |
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum StandardRequest {
+#[serde(
+    tag = "type",
+    rename_all = "snake_case",
+    bound(
+        serialize = "T: Serialize",
+        deserialize = "T: serde::de::DeserializeOwned"
+    )
+)]
+pub enum StandardRequest<T = serde_json::Value>
+where
+    T: Serialize + DeserializeOwned + JsonSchema,
+{
     /// Binary yes/no confirmation request.
     ///
     /// Use this for important decisions like:
@@ -248,7 +263,7 @@ pub enum StandardRequest {
         /// Default value to pre-fill in the input.
         /// User can accept or modify.
         #[serde(skip_serializing_if = "Option::is_none")]
-        default: Option<String>,
+        default: Option<T>,
 
         /// Placeholder text shown when input is empty.
         /// Provides a hint about expected format.
@@ -278,13 +293,22 @@ pub enum StandardRequest {
 
         /// Available options to choose from.
         /// Each option has a value (returned) and label (displayed).
-        options: Vec<SelectOption>,
+        options: Vec<SelectOption<T>>,
 
         /// Whether to allow selecting multiple options.
         /// - `false` (default): single selection, returns one value
         /// - `true`: multiple selection, returns zero or more values
         #[serde(default)]
         multi_select: bool,
+    },
+
+    /// Custom domain-specific request payload.
+    ///
+    /// Use this for application-specific interactions that don't fit
+    /// the standard confirm/prompt/select patterns.
+    Custom {
+        /// The custom request data.
+        data: T,
     },
 }
 
@@ -294,33 +318,16 @@ pub enum StandardRequest {
 ///
 /// | Request | Response |
 /// |---------|----------|
-/// | `Confirm` | `Confirmed(bool)` |
-/// | `Prompt` | `Text(String)` |
-/// | `Select` | `Selected(Vec<String>)` |
+/// | `Confirm` | `Confirmed { value: bool }` |
+/// | `Prompt` | `Text { value: T }` |
+/// | `Select` | `Selected { values: Vec<T> }` |
 /// | Any | `Cancelled` (user cancelled) |
+///
+/// The type parameter `T` defaults to [`serde_json::Value`] for backwards compatibility.
 ///
 /// # Wire Format
 ///
-/// Uses externally-tagged JSON (Rust enum default):
-///
-/// ```json
-/// // Confirmed response
-/// { "confirmed": true }
-///
-/// // Text response
-/// { "text": "user-input-here" }
-///
-/// // Selected response (single selection)
-/// { "selected": ["dev"] }
-///
-/// // Selected response (multi-selection)
-/// { "selected": ["option1", "option2"] }
-///
-/// // Cancelled response
-/// { "cancelled": null }
-/// ```
-///
-/// Wire format uses internally-tagged JSON for consistency with TypeScript clients:
+/// Uses internally-tagged JSON for consistency with TypeScript clients:
 /// ```json
 /// { "type": "confirmed", "value": true }
 /// { "type": "text", "value": "user-input" }
@@ -328,8 +335,18 @@ pub enum StandardRequest {
 /// { "type": "cancelled" }
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum StandardResponse {
+#[serde(
+    tag = "type",
+    rename_all = "snake_case",
+    bound(
+        serialize = "T: Serialize",
+        deserialize = "T: serde::de::DeserializeOwned"
+    )
+)]
+pub enum StandardResponse<T = serde_json::Value>
+where
+    T: Serialize + DeserializeOwned + JsonSchema,
+{
     /// User confirmed (true) or declined (false).
     ///
     /// Response to `StandardRequest::Confirm`.
@@ -340,13 +357,13 @@ pub enum StandardResponse {
         value: bool,
     },
 
-    /// User entered text.
+    /// User entered text or provided a value.
     ///
     /// Response to `StandardRequest::Prompt`.
-    /// May be empty string if user submitted without entering text.
+    /// May be empty if user submitted without entering text.
     Text {
-        /// The text entered by the user
-        value: String,
+        /// The value entered or provided by the user
+        value: T,
     },
 
     /// User selected one or more options (by value).
@@ -358,14 +375,23 @@ pub enum StandardResponse {
     /// - For multi-select: vector with zero or more elements
     Selected {
         /// The values of selected options
-        values: Vec<String>,
+        values: Vec<T>,
+    },
+
+    /// Custom domain-specific response payload.
+    ///
+    /// Corresponds to `StandardRequest::Custom` or any request type
+    /// where the application needs to return a custom response.
+    Custom {
+        /// The custom response data.
+        data: T,
     },
 
     /// User cancelled the request.
     ///
     /// Can be sent in response to any request type.
     /// Indicates the user chose to abort rather than respond.
-    /// This is different from declining (Confirmed(false)) - cancel
+    /// This is different from declining (Confirmed { value: false }) - cancel
     /// means "don't proceed with the workflow at all".
     Cancelled,
 }
@@ -373,9 +399,11 @@ pub enum StandardResponse {
 /// An option in a [`StandardRequest::Select`] request.
 ///
 /// Each option has:
-/// - **value**: Machine-readable identifier returned in the response
+/// - **value**: Machine-readable identifier returned in the response (generic over `T`)
 /// - **label**: Human-readable text displayed to the user
 /// - **description**: Optional additional context about the option
+///
+/// The type parameter `T` defaults to [`serde_json::Value`] for backwards compatibility.
 ///
 /// # Wire Format
 ///
@@ -401,12 +429,19 @@ pub enum StandardResponse {
 /// ];
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
-pub struct SelectOption {
+#[serde(bound(
+    serialize = "T: Serialize",
+    deserialize = "T: serde::de::DeserializeOwned"
+))]
+pub struct SelectOption<T = serde_json::Value>
+where
+    T: Serialize + DeserializeOwned + JsonSchema,
+{
     /// Machine-readable value returned when this option is selected.
     ///
     /// This is what appears in `StandardResponse::Selected`.
     /// Should be a stable identifier (e.g., "dev", "prod", "option_1").
-    pub value: String,
+    pub value: T,
 
     /// Human-readable label displayed to the user.
     ///
@@ -424,9 +459,12 @@ pub struct SelectOption {
 impl SelectOption {
     /// Create a new select option with value and label.
     ///
+    /// This constructor is for the default `T = serde_json::Value` type.
+    /// The `value` parameter is converted to `serde_json::Value` via `.into()`.
+    ///
     /// # Arguments
     ///
-    /// * `value` - Machine-readable identifier (returned in response)
+    /// * `value` - Machine-readable identifier (returned in response), convertible to `serde_json::Value`
     /// * `label` - Human-readable display text
     ///
     /// # Example
@@ -435,10 +473,9 @@ impl SelectOption {
     /// use plexus_core::plexus::bidirectional::SelectOption;
     ///
     /// let opt = SelectOption::new("dev", "Development Environment");
-    /// assert_eq!(opt.value, "dev");
     /// assert_eq!(opt.label, "Development Environment");
     /// ```
-    pub fn new(value: impl Into<String>, label: impl Into<String>) -> Self {
+    pub fn new(value: impl Into<serde_json::Value>, label: impl Into<String>) -> Self {
         Self {
             value: value.into(),
             label: label.into(),
@@ -464,13 +501,40 @@ impl SelectOption {
     }
 }
 
+impl<T> SelectOption<T>
+where
+    T: Serialize + DeserializeOwned + JsonSchema,
+{
+    /// Create a new select option with a typed value and label.
+    ///
+    /// Use this constructor when working with a custom type `T`.
+    ///
+    /// # Arguments
+    ///
+    /// * `value` - The typed value for this option
+    /// * `label` - Human-readable display text
+    pub fn new_typed(value: T, label: impl Into<String>) -> Self {
+        Self {
+            value,
+            label: label.into(),
+            description: None,
+        }
+    }
+
+    /// Add a description to this option.
+    pub fn with_description_typed(mut self, desc: impl Into<String>) -> Self {
+        self.description = Some(desc.into());
+        self
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn test_standard_request_serialization() {
-        let req = StandardRequest::Confirm {
+        let req: StandardRequest = StandardRequest::Confirm {
             message: "Continue?".into(),
             default: Some(false),
         };
@@ -483,7 +547,7 @@ mod tests {
 
     #[test]
     fn test_standard_response_serialization() {
-        let resp = StandardResponse::Confirmed { value: true };
+        let resp: StandardResponse = StandardResponse::Confirmed { value: true };
 
         let json = serde_json::to_value(&resp).unwrap();
         // Internally tagged: { "type": "confirmed", "value": true }
@@ -500,7 +564,7 @@ mod tests {
         let opt = SelectOption::new("prod", "Production")
             .with_description("Requires approval");
 
-        assert_eq!(opt.value, "prod");
+        assert_eq!(opt.value, serde_json::Value::String("prod".into()));
         assert_eq!(opt.label, "Production");
         assert_eq!(opt.description, Some("Requires approval".into()));
     }
@@ -518,5 +582,68 @@ mod tests {
             err.to_string(),
             "Type mismatch: expected Confirmed, got Text"
         );
+    }
+
+    #[test]
+    fn test_standard_request_prompt_generic() {
+        let req: StandardRequest = StandardRequest::Prompt {
+            message: "Enter value:".into(),
+            default: Some(serde_json::Value::String("default".into())),
+            placeholder: None,
+        };
+
+        let json = serde_json::to_value(&req).unwrap();
+        assert_eq!(json["type"], "prompt");
+        assert_eq!(json["default"], "default");
+    }
+
+    #[test]
+    fn test_standard_response_text_generic() {
+        let resp: StandardResponse = StandardResponse::Text {
+            value: serde_json::Value::String("hello".into()),
+        };
+
+        let json = serde_json::to_value(&resp).unwrap();
+        assert_eq!(json["type"], "text");
+        assert_eq!(json["value"], "hello");
+
+        let roundtrip: StandardResponse = serde_json::from_value(json).unwrap();
+        assert_eq!(roundtrip, resp);
+    }
+
+    #[test]
+    fn test_standard_response_selected_generic() {
+        let resp: StandardResponse = StandardResponse::Selected {
+            values: vec![
+                serde_json::Value::String("a".into()),
+                serde_json::Value::String("b".into()),
+            ],
+        };
+
+        let json = serde_json::to_value(&resp).unwrap();
+        assert_eq!(json["type"], "selected");
+        assert!(json["values"].as_array().unwrap().len() == 2);
+    }
+
+    #[test]
+    fn test_custom_variant_request() {
+        let req: StandardRequest = StandardRequest::Custom {
+            data: serde_json::json!({"action": "special", "param": 42}),
+        };
+
+        let json = serde_json::to_value(&req).unwrap();
+        assert_eq!(json["type"], "custom");
+        assert_eq!(json["data"]["action"], "special");
+    }
+
+    #[test]
+    fn test_custom_variant_response() {
+        let resp: StandardResponse = StandardResponse::Custom {
+            data: serde_json::json!({"result": "ok"}),
+        };
+
+        let json = serde_json::to_value(&resp).unwrap();
+        assert_eq!(json["type"], "custom");
+        assert_eq!(json["data"]["result"], "ok");
     }
 }

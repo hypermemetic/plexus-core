@@ -492,10 +492,15 @@ impl BidirChannel<StandardRequest, StandardResponse> {
 
     /// Ask user for text input
     ///
+    /// Returns the user's input as a `serde_json::Value`. For most prompts,
+    /// this will be a `Value::String`. Use `.as_str()` or `.to_string()` to
+    /// extract the string content.
+    ///
     /// # Examples
     ///
     /// ```rust,ignore
-    /// let name = ctx.prompt("Enter your name:").await?;
+    /// let name_val = ctx.prompt("Enter your name:").await?;
+    /// let name = name_val.as_str().unwrap_or("").to_string();
     /// ```
     pub async fn prompt(&self, message: &str) -> Result<String, BidirError> {
         let resp = self
@@ -507,7 +512,13 @@ impl BidirChannel<StandardRequest, StandardResponse> {
             .await?;
 
         match resp {
-            StandardResponse::Text { value } => Ok(value),
+            StandardResponse::Text { value } => {
+                // Extract string from Value for convenience
+                match value {
+                    serde_json::Value::String(s) => Ok(s),
+                    other => Ok(other.to_string()),
+                }
+            }
             StandardResponse::Cancelled => Err(BidirError::Cancelled),
             _ => Err(BidirError::TypeMismatch {
                 expected: "Text".into(),
@@ -517,6 +528,9 @@ impl BidirChannel<StandardRequest, StandardResponse> {
     }
 
     /// Ask user to select from options
+    ///
+    /// Returns the selected values as strings. Each `SelectOption` value
+    /// is converted from `serde_json::Value` to `String`.
     ///
     /// # Examples
     ///
@@ -541,7 +555,17 @@ impl BidirChannel<StandardRequest, StandardResponse> {
             .await?;
 
         match resp {
-            StandardResponse::Selected { values } => Ok(values),
+            StandardResponse::Selected { values } => {
+                // Convert each Value to String for convenience
+                let strings = values
+                    .into_iter()
+                    .map(|v| match v {
+                        serde_json::Value::String(s) => s,
+                        other => other.to_string(),
+                    })
+                    .collect();
+                Ok(strings)
+            }
             StandardResponse::Cancelled => Err(BidirError::Cancelled),
             _ => Err(BidirError::TypeMismatch {
                 expected: "Selected".into(),
@@ -606,11 +630,15 @@ impl BidirWithFallback<StandardRequest, StandardResponse> {
                 value: default.unwrap_or(true),
             },
             StandardRequest::Prompt { default, .. } => StandardResponse::Text {
-                value: default.clone().unwrap_or_default(),
+                value: default.clone().unwrap_or(serde_json::Value::String(String::new())),
             },
             StandardRequest::Select { options, .. } => StandardResponse::Selected {
-                values: vec![options.first().map(|o| o.value.clone()).unwrap_or_default()],
+                values: vec![options
+                    .first()
+                    .map(|o| o.value.clone())
+                    .unwrap_or(serde_json::Value::String(String::new()))],
             },
+            StandardRequest::Custom { data } => StandardResponse::Custom { data: data.clone() },
         })
     }
 }
@@ -665,7 +693,10 @@ mod tests {
             channel
                 .handle_response(
                     request_id,
-                    serde_json::to_value(&StandardResponse::Confirmed { value: true }).unwrap(),
+                    serde_json::to_value(&StandardResponse::<serde_json::Value>::Confirmed {
+                        value: true,
+                    })
+                    .unwrap(),
                 )
                 .unwrap();
         } else {
@@ -695,7 +726,10 @@ mod tests {
             channel
                 .handle_response(
                     request_id,
-                    serde_json::to_value(&StandardResponse::Confirmed { value: true }).unwrap(),
+                    serde_json::to_value(&StandardResponse::<serde_json::Value>::Confirmed {
+                        value: true,
+                    })
+                    .unwrap(),
                 )
                 .unwrap();
         }

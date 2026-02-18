@@ -74,7 +74,10 @@ async fn test_bidir_channel_direct_flow() {
         channel
             .handle_response(
                 request_id,
-                serde_json::to_value(&StandardResponse::Confirmed { value: true }).unwrap(),
+                serde_json::to_value(&StandardResponse::<serde_json::Value>::Confirmed {
+                    value: true,
+                })
+                .unwrap(),
             )
             .unwrap();
     }
@@ -96,7 +99,10 @@ async fn test_bidir_channel_prompt_flow() {
         channel
             .handle_response(
                 request_id,
-                serde_json::to_value(&StandardResponse::Text { value: "Alice".into() }).unwrap(),
+                serde_json::to_value(&StandardResponse::<serde_json::Value>::Text {
+                    value: serde_json::Value::String("Alice".into()),
+                })
+                .unwrap(),
             )
             .unwrap();
     }
@@ -123,7 +129,10 @@ async fn test_bidir_channel_select_flow() {
         channel
             .handle_response(
                 request_id,
-                serde_json::to_value(&StandardResponse::Selected { values: vec!["b".into()] }).unwrap(),
+                serde_json::to_value(&StandardResponse::<serde_json::Value>::Selected {
+                    values: vec![serde_json::Value::String("b".into())],
+                })
+                .unwrap(),
             )
             .unwrap();
     }
@@ -144,7 +153,7 @@ async fn test_bidir_channel_cancelled_response() {
         channel
             .handle_response(
                 request_id,
-                serde_json::to_value(&StandardResponse::Cancelled).unwrap(),
+                serde_json::to_value(&StandardResponse::<serde_json::Value>::Cancelled).unwrap(),
             )
             .unwrap();
     }
@@ -371,12 +380,17 @@ async fn test_fallback_prompt_uses_default() {
     let resp = fallback
         .request(StandardRequest::Prompt {
             message: "Name?".into(),
-            default: Some("DefaultName".into()),
+            default: Some(serde_json::Value::String("DefaultName".into())),
             placeholder: None,
         })
         .await;
 
-    assert_eq!(resp, StandardResponse::Text { value: "DefaultName".into() });
+    assert_eq!(
+        resp,
+        StandardResponse::Text {
+            value: serde_json::Value::String("DefaultName".into()),
+        }
+    );
 }
 
 #[tokio::test]
@@ -397,7 +411,12 @@ async fn test_fallback_select_uses_first_option() {
         })
         .await;
 
-    assert_eq!(resp, StandardResponse::Selected { values: vec!["first".into()] });
+    assert_eq!(
+        resp,
+        StandardResponse::Selected {
+            values: vec![serde_json::Value::String("first".into())],
+        }
+    );
 }
 
 #[tokio::test]
@@ -408,8 +427,13 @@ async fn test_fallback_custom_function() {
     let fallback = BidirWithFallback::new(channel, |req: &StandardRequest| {
         match req {
             StandardRequest::Confirm { .. } => StandardResponse::Confirmed { value: false }, // Always decline
-            StandardRequest::Prompt { .. } => StandardResponse::Text { value: "custom".into() },
-            StandardRequest::Select { .. } => StandardResponse::Selected { values: vec!["custom".into()] },
+            StandardRequest::Prompt { .. } => StandardResponse::Text {
+                value: serde_json::Value::String("custom".into()),
+            },
+            StandardRequest::Select { .. } => StandardResponse::Selected {
+                values: vec![serde_json::Value::String("custom".into())],
+            },
+            StandardRequest::Custom { data } => StandardResponse::Custom { data: data.clone() },
         }
     });
 
@@ -445,10 +469,13 @@ async fn test_create_test_standard_channel() {
 async fn test_auto_respond_channel() {
     let ctx = auto_respond_channel(|req: &StandardRequest| match req {
         StandardRequest::Confirm { .. } => StandardResponse::Confirmed { value: true },
-        StandardRequest::Prompt { message, .. } => StandardResponse::Text { value: message.clone() },
+        StandardRequest::Prompt { message, .. } => StandardResponse::Text {
+            value: serde_json::Value::String(message.clone()),
+        },
         StandardRequest::Select { options, .. } => StandardResponse::Selected {
             values: vec![options[0].value.clone()],
         },
+        StandardRequest::Custom { data } => StandardResponse::Custom { data: data.clone() },
     });
 
     assert_eq!(ctx.confirm("Test?").await.unwrap(), true);
@@ -641,7 +668,7 @@ fn test_select_option_without_description_serialization() {
 
 #[test]
 fn test_standard_request_confirm_serialization() {
-    let req = StandardRequest::Confirm {
+    let req: StandardRequest = StandardRequest::Confirm {
         message: "Continue?".into(),
         default: Some(true),
     };
@@ -658,9 +685,9 @@ fn test_standard_request_confirm_serialization() {
 
 #[test]
 fn test_standard_request_prompt_serialization() {
-    let req = StandardRequest::Prompt {
+    let req: StandardRequest = StandardRequest::Prompt {
         message: "Enter name:".into(),
-        default: Some("John".into()),
+        default: Some(serde_json::Value::String("John".into())),
         placeholder: Some("Type here...".into()),
     };
 
@@ -673,7 +700,7 @@ fn test_standard_request_prompt_serialization() {
 
 #[test]
 fn test_standard_request_select_serialization() {
-    let req = StandardRequest::Select {
+    let req: StandardRequest = StandardRequest::Select {
         message: "Choose:".into(),
         options: vec![
             SelectOption::new("a", "Option A"),
@@ -691,7 +718,7 @@ fn test_standard_request_select_serialization() {
 
 #[test]
 fn test_standard_response_confirmed_serialization() {
-    let resp = StandardResponse::Confirmed { value: true };
+    let resp: StandardResponse = StandardResponse::Confirmed { value: true };
     let json = serde_json::to_value(&resp).unwrap();
     // Internally tagged: { "type": "confirmed", "value": true }
     assert_eq!(json["type"], "confirmed");
@@ -703,7 +730,9 @@ fn test_standard_response_confirmed_serialization() {
 
 #[test]
 fn test_standard_response_text_serialization() {
-    let resp = StandardResponse::Text { value: "Hello".into() };
+    let resp: StandardResponse = StandardResponse::Text {
+        value: serde_json::Value::String("Hello".into()),
+    };
     let json = serde_json::to_value(&resp).unwrap();
     // Internally tagged: { "type": "text", "value": "Hello" }
     assert_eq!(json["type"], "text");
@@ -712,7 +741,12 @@ fn test_standard_response_text_serialization() {
 
 #[test]
 fn test_standard_response_selected_serialization() {
-    let resp = StandardResponse::Selected { values: vec!["a".into(), "b".into()] };
+    let resp: StandardResponse = StandardResponse::Selected {
+        values: vec![
+            serde_json::Value::String("a".into()),
+            serde_json::Value::String("b".into()),
+        ],
+    };
     let json = serde_json::to_value(&resp).unwrap();
     // Internally tagged: { "type": "selected", "values": ["a", "b"] }
     assert_eq!(json["type"], "selected");
@@ -724,7 +758,7 @@ fn test_standard_response_selected_serialization() {
 
 #[test]
 fn test_standard_response_cancelled_serialization() {
-    let resp = StandardResponse::Cancelled;
+    let resp: StandardResponse = StandardResponse::Cancelled;
     let json = serde_json::to_value(&resp).unwrap();
     // Internally tagged unit variant: { "type": "cancelled" }
     assert_eq!(json["type"], "cancelled");

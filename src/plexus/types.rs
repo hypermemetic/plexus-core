@@ -77,6 +77,21 @@ pub enum PlexusStreamItem {
         recoverable: bool,
     },
 
+    /// Bidirectional request from server to client
+    ///
+    /// Server can ask client for input during stream execution.
+    /// Client must respond via transport-specific mechanism
+    /// (MCP: _plexus_respond tool, WebSocket: plexus.respond RPC).
+    #[serde(rename_all = "camelCase")]
+    Request {
+        /// Unique identifier for correlating response
+        request_id: String,
+        /// Serialized request data (generic Req type)
+        request_data: Value,
+        /// Maximum time to wait for response (milliseconds)
+        timeout_ms: u64,
+    },
+
     /// Stream completed successfully
     Done {
         /// Metadata from calling layer
@@ -118,18 +133,30 @@ impl PlexusStreamItem {
         }
     }
 
+    /// Create a Request item
+    pub fn request(request_id: String, request_data: Value, timeout_ms: u64) -> Self {
+        Self::Request {
+            request_id,
+            request_data,
+            timeout_ms,
+        }
+    }
+
     /// Create a Done item
     pub fn done(metadata: StreamMetadata) -> Self {
         Self::Done { metadata }
     }
 
-    /// Get the metadata from any stream item variant
-    pub fn metadata(&self) -> &StreamMetadata {
+    /// Get the metadata from any stream item variant (if available)
+    ///
+    /// Note: Request items don't have metadata as they're server-initiated
+    pub fn metadata(&self) -> Option<&StreamMetadata> {
         match self {
-            Self::Data { metadata, .. } => metadata,
-            Self::Progress { metadata, .. } => metadata,
-            Self::Error { metadata, .. } => metadata,
-            Self::Done { metadata } => metadata,
+            Self::Data { metadata, .. } => Some(metadata),
+            Self::Progress { metadata, .. } => Some(metadata),
+            Self::Error { metadata, .. } => Some(metadata),
+            Self::Done { metadata } => Some(metadata),
+            Self::Request { .. } => None,
         }
     }
 }

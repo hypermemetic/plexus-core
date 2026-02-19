@@ -34,6 +34,35 @@ pub enum PlexusError {
     InvalidParams(String),
     ExecutionError(String),
     HandleNotSupported(String),
+    TransportError(TransportErrorKind),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "error_kind", rename_all = "snake_case")]
+pub enum TransportErrorKind {
+    ConnectionRefused { host: String, port: u16 },
+    ConnectionTimeout { host: String, port: u16 },
+    ProtocolError { message: String },
+    NetworkError { message: String },
+}
+
+impl std::fmt::Display for TransportErrorKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TransportErrorKind::ConnectionRefused { host, port } => {
+                write!(f, "Connection refused to {}:{}", host, port)
+            }
+            TransportErrorKind::ConnectionTimeout { host, port } => {
+                write!(f, "Connection timeout to {}:{}", host, port)
+            }
+            TransportErrorKind::ProtocolError { message } => {
+                write!(f, "Protocol error: {}", message)
+            }
+            TransportErrorKind::NetworkError { message } => {
+                write!(f, "Network error: {}", message)
+            }
+        }
+    }
 }
 
 impl std::fmt::Display for PlexusError {
@@ -47,6 +76,20 @@ impl std::fmt::Display for PlexusError {
             PlexusError::ExecutionError(msg) => write!(f, "Execution error: {}", msg),
             PlexusError::HandleNotSupported(activation) => {
                 write!(f, "Handle resolution not supported by activation: {}", activation)
+            }
+            PlexusError::TransportError(kind) => match kind {
+                TransportErrorKind::ConnectionRefused { host, port } => {
+                    write!(f, "Connection refused to {}:{}", host, port)
+                }
+                TransportErrorKind::ConnectionTimeout { host, port } => {
+                    write!(f, "Connection timeout to {}:{}", host, port)
+                }
+                TransportErrorKind::ProtocolError { message } => {
+                    write!(f, "Protocol error: {}", message)
+                }
+                TransportErrorKind::NetworkError { message } => {
+                    write!(f, "Network error: {}", message)
+                }
             }
         }
     }
@@ -936,6 +979,49 @@ impl DynamicHub {
             }
         )?;
 
+        // Register {ns}.respond method for WebSocket bidirectional responses
+        // This allows clients to respond to server-initiated requests (like confirmations/prompts)
+        let respond_method: &'static str = Box::leak(format!("{}.respond", ns).into_boxed_str());
+        module.register_async_method(respond_method, |params, _ctx, _ext| async move {
+            use super::bidirectional::{handle_pending_response, BidirError};
+
+            let p: RespondParams = params.parse()?;
+
+            tracing::debug!(
+                request_id = %p.request_id,
+                "Handling {}.respond via WebSocket",
+                "plexus"
+            );
+
+            match handle_pending_response(&p.request_id, p.response_data) {
+                Ok(()) => Ok(serde_json::json!({"success": true})),
+                Err(BidirError::UnknownRequest) => {
+                    tracing::warn!(request_id = %p.request_id, "Unknown request ID in respond");
+                    Err(jsonrpsee::types::ErrorObject::owned(
+                        -32602,
+                        format!("Unknown request ID: {}. The request may have timed out or been cancelled.", p.request_id),
+                        None::<()>,
+                    ))
+                }
+                Err(BidirError::ChannelClosed) => {
+                    tracing::warn!(request_id = %p.request_id, "Channel closed in respond");
+                    Err(jsonrpsee::types::ErrorObject::owned(
+                        -32000,
+                        "Response channel was closed (request may have timed out)",
+                        None::<()>,
+                    ))
+                }
+                Err(e) => {
+                    tracing::error!(request_id = %p.request_id, error = ?e, "Error in respond");
+                    Err(jsonrpsee::types::ErrorObject::owned(
+                        -32000,
+                        format!("Failed to deliver response: {}", e),
+                        None::<()>,
+                    ))
+                }
+            }
+        })?;
+
         // Register pending RPC methods from activations
         let pending = std::mem::take(&mut *hub.inner.pending_rpc.lock().unwrap());
         for factory in pending {
@@ -958,6 +1044,13 @@ struct CallParams {
 #[derive(Debug, Default, serde::Deserialize)]
 struct SchemaParams {
     method: Option<String>,
+}
+
+/// Params for {ns}.respond (WebSocket bidirectional response)
+#[derive(Debug, serde::Deserialize)]
+struct RespondParams {
+    request_id: String,
+    response_data: Value,
 }
 
 /// Helper to pipe a PlexusStream to a subscription sink

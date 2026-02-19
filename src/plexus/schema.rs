@@ -7,9 +7,11 @@
 /// (uuid::Uuid instead of String) and doc comments, schemars generates complete
 /// schemas with format annotations, descriptions, and required arrays.
 
-use schemars::JsonSchema;
+use schemars::{JsonSchema, schema_for};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+
+use super::bidirectional::{StandardRequest, StandardResponse};
 
 // ============================================================================
 // Plugin Schema
@@ -100,6 +102,27 @@ pub struct MethodSchema {
     /// tells clients how to present the result.
     #[serde(default)]
     pub streaming: bool,
+
+    /// Whether this method supports bidirectional communication
+    ///
+    /// When true, the server can send requests to the client during method execution
+    /// and wait for responses (e.g., confirmations, prompts, selections).
+    #[serde(default)]
+    pub bidirectional: bool,
+
+    /// JSON Schema for the request type sent from server to client
+    ///
+    /// Only relevant when `bidirectional: true`. Describes the structure of
+    /// requests the server may send during method execution.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_type: Option<schemars::Schema>,
+
+    /// JSON Schema for the response type sent from client to server
+    ///
+    /// Only relevant when `bidirectional: true`. Describes the structure of
+    /// responses the client should send in reply to server requests.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub response_type: Option<schemars::Schema>,
 }
 
 impl PluginSchema {
@@ -340,6 +363,9 @@ impl MethodSchema {
             params: None,
             returns: None,
             streaming: false,
+            bidirectional: false,
+            request_type: None,
+            response_type: None,
         }
     }
 
@@ -362,6 +388,44 @@ impl MethodSchema {
     pub fn with_streaming(mut self, streaming: bool) -> Self {
         self.streaming = streaming;
         self
+    }
+
+    /// Set whether this method supports bidirectional communication
+    ///
+    /// When true, the server can send requests to the client during method
+    /// execution and wait for responses.
+    pub fn with_bidirectional(mut self, bidirectional: bool) -> Self {
+        self.bidirectional = bidirectional;
+        self
+    }
+
+    /// Set the JSON Schema for server-to-client request types
+    ///
+    /// Only relevant when `bidirectional: true`. Use `schema_for!(YourRequestType)`
+    /// to generate the schema.
+    pub fn with_request_type(mut self, schema: schemars::Schema) -> Self {
+        self.request_type = Some(schema);
+        self
+    }
+
+    /// Set the JSON Schema for client-to-server response types
+    ///
+    /// Only relevant when `bidirectional: true`. Use `schema_for!(YourResponseType)`
+    /// to generate the schema.
+    pub fn with_response_type(mut self, schema: schemars::Schema) -> Self {
+        self.response_type = Some(schema);
+        self
+    }
+
+    /// Configure method for standard bidirectional communication
+    ///
+    /// Sets `bidirectional: true` and configures request/response types to use
+    /// `StandardRequest` and `StandardResponse`, which support common UI patterns
+    /// like confirmations, prompts, and selections.
+    pub fn with_standard_bidirectional(self) -> Self {
+        self.with_bidirectional(true)
+            .with_request_type(schema_for!(StandardRequest).into())
+            .with_response_type(schema_for!(StandardResponse).into())
     }
 }
 

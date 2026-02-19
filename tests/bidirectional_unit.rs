@@ -274,34 +274,40 @@ async fn test_registry_channel_closed() {
 
 #[tokio::test]
 async fn test_registry_pending_count() {
-    let initial_count = pending_count();
-
+    // Note: pending_count() reflects global state shared across concurrent tests,
+    // so we only assert on per-ID presence rather than exact counts.
     let (tx1, _rx1) = oneshot::channel::<Value>();
     let (tx2, _rx2) = oneshot::channel::<Value>();
     let id1 = format!("count-test-1-{}", uuid::Uuid::new_v4());
     let id2 = format!("count-test-2-{}", uuid::Uuid::new_v4());
 
+    assert!(!is_request_pending(&id1));
+    assert!(!is_request_pending(&id2));
+
     register_pending_request(id1.clone(), tx1);
-    assert_eq!(pending_count(), initial_count + 1);
+    assert!(is_request_pending(&id1));
 
     register_pending_request(id2.clone(), tx2);
-    assert_eq!(pending_count(), initial_count + 2);
+    assert!(is_request_pending(&id2));
+
+    // Count must be at least 2 (our entries), but may be higher due to concurrent tests
+    assert!(pending_count() >= 2);
 
     unregister_pending_request(&id1);
-    assert_eq!(pending_count(), initial_count + 1);
+    assert!(!is_request_pending(&id1));
+    assert!(is_request_pending(&id2));
 
     unregister_pending_request(&id2);
-    assert_eq!(pending_count(), initial_count);
+    assert!(!is_request_pending(&id1));
+    assert!(!is_request_pending(&id2));
 }
 
 #[tokio::test]
 async fn test_registry_concurrent_requests() {
-    let initial_count = pending_count();
-
     let mut handles = Vec::new();
     let mut ids = Vec::new();
 
-    // Register multiple requests concurrently
+    // Register multiple requests
     for i in 0..10 {
         let (tx, rx) = oneshot::channel::<Value>();
         let id = format!("concurrent-{}-{}", i, uuid::Uuid::new_v4());
@@ -311,14 +317,20 @@ async fn test_registry_concurrent_requests() {
         handles.push(tokio::spawn(async move { rx.await }));
     }
 
-    assert_eq!(pending_count(), initial_count + 10);
+    // All 10 should be individually pending
+    for id in &ids {
+        assert!(is_request_pending(id));
+    }
 
     // Handle all responses
     for id in &ids {
         handle_pending_response(id, serde_json::json!({"id": id})).unwrap();
     }
 
-    assert_eq!(pending_count(), initial_count);
+    // All 10 should be individually removed
+    for id in &ids {
+        assert!(!is_request_pending(id));
+    }
 
     // All receivers should have received their responses
     for handle in handles {

@@ -131,6 +131,7 @@ pub fn pending_count() -> usize {
 
 /// Clear all pending requests (for testing)
 #[cfg(test)]
+#[allow(dead_code)]
 pub fn clear_all() {
     let mut registry = PENDING_RESPONSES.write().unwrap();
     registry.clear();
@@ -140,17 +141,18 @@ pub fn clear_all() {
 mod tests {
     use super::*;
 
+    // Note: These tests run concurrently and share a global registry.
+    // Use unique request IDs and assert on per-ID presence (is_request_pending)
+    // rather than global pending_count(), which races with concurrent tests.
+
     #[tokio::test]
     async fn test_register_and_handle() {
-        clear_all();
-
         let (tx, rx) = oneshot::channel();
-        let request_id = "test-req-1".to_string();
+        let request_id = format!("test-reg-handle-{}", uuid::Uuid::new_v4());
 
         // Register
         register_pending_request(request_id.clone(), tx);
         assert!(is_request_pending(&request_id));
-        assert_eq!(pending_count(), 1);
 
         // Handle response
         let response = serde_json::json!({"confirmed": true});
@@ -162,23 +164,21 @@ mod tests {
 
         // Request should be removed
         assert!(!is_request_pending(&request_id));
-        assert_eq!(pending_count(), 0);
     }
 
     #[tokio::test]
     async fn test_unknown_request() {
-        clear_all();
-
-        let result = handle_pending_response("nonexistent", serde_json::json!({}));
+        let result = handle_pending_response(
+            &format!("nonexistent-{}", uuid::Uuid::new_v4()),
+            serde_json::json!({}),
+        );
         assert!(matches!(result, Err(BidirError::UnknownRequest)));
     }
 
     #[tokio::test]
     async fn test_unregister() {
-        clear_all();
-
         let (tx, _rx) = oneshot::channel();
-        let request_id = "test-req-2".to_string();
+        let request_id = format!("test-unreg-{}", uuid::Uuid::new_v4());
 
         register_pending_request(request_id.clone(), tx);
         assert!(is_request_pending(&request_id));
@@ -190,10 +190,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_channel_closed() {
-        clear_all();
-
         let (tx, rx) = oneshot::channel();
-        let request_id = "test-req-3".to_string();
+        let request_id = format!("test-closed-{}", uuid::Uuid::new_v4());
 
         register_pending_request(request_id.clone(), tx);
 

@@ -219,16 +219,90 @@
 
 pub mod channel;
 pub mod helpers;
+pub mod protocol;
 pub mod registry;
 pub mod types;
 
-pub use channel::{BidirChannel, BidirWithFallback, StandardBidirChannel};
+// =============================================================================
+// New trait-based protocol (recommended)
+// =============================================================================
+
+pub use protocol::{BidirRequest, BidirResponse};
+
+// Well-known request types (plain structs)
+pub use types::{
+    CancelledResponse, ConfirmRequest, ConfirmedResponse, PromptRequest, SelectRequest,
+    SelectedResponse, TextResponse,
+};
+
+// Union types for convenience
+pub use types::{WellKnownRequest, WellKnownResponse};
+
+// Multi-type channel
+pub use channel::MultiBidirChannel;
+
+// =============================================================================
+// Generic channel types
+// =============================================================================
+
+pub use channel::{BidirChannel, BidirWithFallback};
+
+// =============================================================================
+// Backwards compatibility (deprecated)
+// =============================================================================
+
+/// Type alias for the standard bidirectional channel.
+///
+/// **DEPRECATED**: This alias points to the legacy enum-based StandardRequest/StandardResponse.
+/// For new code, use [`MultiBidirChannel`] which supports the trait-based protocol.
+///
+/// # Migration
+///
+/// ```rust,ignore
+/// // Old
+/// async fn my_method(ctx: &StandardBidirChannel) { ... }
+///
+/// // New
+/// async fn my_method(ctx: &MultiBidirChannel) { ... }
+/// ```
+#[deprecated(
+    since = "0.2.0",
+    note = "Use MultiBidirChannel instead for trait-based protocol support"
+)]
+pub type StandardBidirChannel = BidirChannel<StandardRequest, StandardResponse>;
+
+/// Legacy enum-based request type.
+///
+/// **DEPRECATED**: Use [`ConfirmRequest`], [`PromptRequest`], [`SelectRequest`],
+/// or implement [`BidirRequest`] for custom types.
+#[deprecated(
+    since = "0.2.0",
+    note = "Use ConfirmRequest, PromptRequest, SelectRequest, or implement BidirRequest"
+)]
+pub use types::StandardRequest;
+
+/// Legacy enum-based response type.
+///
+/// **DEPRECATED**: Use [`ConfirmedResponse`], [`TextResponse`], [`SelectedResponse`],
+/// [`CancelledResponse`], or implement [`BidirResponse`] for custom types.
+#[deprecated(
+    since = "0.2.0",
+    note = "Use ConfirmedResponse, TextResponse, SelectedResponse, CancelledResponse, or implement BidirResponse"
+)]
+pub use types::StandardResponse;
+
+// =============================================================================
+// Common types and utilities
+// =============================================================================
+
+pub use types::{BidirError, SelectOption};
+
 pub use helpers::{
     TimeoutConfig, auto_confirm_channel, auto_respond_channel, bidir_error_message,
     create_test_bidir_channel, create_test_standard_channel,
 };
+
 pub use registry::{
     handle_pending_response, is_request_pending, pending_count, register_pending_request,
     unregister_pending_request,
 };
-pub use types::{BidirError, SelectOption, StandardRequest, StandardResponse};

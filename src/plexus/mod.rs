@@ -14,7 +14,16 @@ pub mod schema;
 pub mod streaming;
 pub mod types;
 
-pub use bidirectional::{BidirChannel, BidirError, SelectOption, StandardBidirChannel, StandardRequest, StandardResponse};
+// New trait-based bidirectional types (recommended)
+pub use bidirectional::{
+    BidirChannel, BidirError, BidirRequest, BidirResponse, CancelledResponse, ConfirmRequest,
+    ConfirmedResponse, MultiBidirChannel, PromptRequest, SelectOption, SelectedResponse,
+    TextResponse, WellKnownRequest, WellKnownResponse,
+};
+
+// Legacy bidirectional types (deprecated but still exported for backwards compatibility)
+#[allow(deprecated)]
+pub use bidirectional::{StandardBidirChannel, StandardRequest, StandardResponse};
 pub use context::PlexusContext;
 #[deprecated(note = "Use GuidanceErrorType and GuidanceSuggestion from stream events instead")]
 pub use errors::{GuidedError, GuidedErrorData, TryRequest};

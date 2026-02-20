@@ -59,8 +59,12 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::time::timeout;
 use uuid::Uuid;
 
+use super::protocol::{BidirRequest, BidirResponse};
 use super::registry::{register_pending_request, unregister_pending_request};
-use super::types::{BidirError, SelectOption, StandardRequest, StandardResponse};
+use super::types::{
+    BidirError, ConfirmRequest, ConfirmedResponse, PromptRequest, SelectOption, SelectedResponse,
+    StandardRequest, StandardResponse, TextResponse,
+};
 use crate::plexus::types::PlexusStreamItem;
 
 /// Generic bidirectional channel for type-safe server-to-client requests.
@@ -643,6 +647,362 @@ impl BidirWithFallback<StandardRequest, StandardResponse> {
     }
 }
 
+// =============================================================================
+// MultiBidirChannel - Generic channel for multiple request/response types
+// =============================================================================
+
+/// Multi-type bidirectional channel that can handle any request/response types.
+///
+/// Unlike [`BidirChannel`] which is parameterized over specific request/response types,
+/// `MultiBidirChannel` can handle ANY types that implement [`BidirRequest`] and
+/// [`BidirResponse`] traits. This is useful when you need to support multiple
+/// interaction types in a single context.
+///
+/// # Examples
+///
+/// ## Using typed requests
+///
+/// ```rust,ignore
+/// use plexus_core::plexus::bidirectional::{
+///     MultiBidirChannel, ConfirmRequest, ConfirmedResponse,
+///     PromptRequest, TextResponse
+/// };
+///
+/// async fn wizard(ctx: &MultiBidirChannel) -> Result<(), BidirError> {
+///     // Confirm action
+///     let confirmed: ConfirmedResponse = ctx.request(ConfirmRequest {
+///         message: "Continue?".into(),
+///         default: None,
+///     }).await?;
+///
+///     if confirmed.value {
+///         // Get user input
+///         let text: TextResponse = ctx.request(PromptRequest {
+///             message: "Enter name:".into(),
+///             default: None,
+///             placeholder: None,
+///         }).await?;
+///     }
+///
+///     Ok(())
+/// }
+/// ```
+///
+/// ## Using convenience methods
+///
+/// ```rust,ignore
+/// async fn quick_confirm(ctx: &MultiBidirChannel) -> Result<bool, BidirError> {
+///     ctx.confirm("Delete file?").await
+/// }
+/// ```
+pub struct MultiBidirChannel {
+    /// Channel to send PlexusStreamItems (including Request items)
+    stream_tx: mpsc::Sender<PlexusStreamItem>,
+
+    /// Whether bidirectional communication is supported by transport
+    bidirectional_supported: bool,
+
+    /// Whether to use global registry for response routing (for MCP transport)
+    use_global_registry: bool,
+
+    /// Provenance path (for debugging/logging)
+    provenance: Vec<String>,
+
+    /// Plexus hash (for metadata)
+    plexus_hash: String,
+}
+
+impl MultiBidirChannel {
+    /// Create a new multi-type bidirectional channel
+    ///
+    /// By default, uses the global response registry for compatibility with all transport types.
+    pub fn new(
+        stream_tx: mpsc::Sender<PlexusStreamItem>,
+        bidirectional_supported: bool,
+        provenance: Vec<String>,
+        plexus_hash: String,
+    ) -> Self {
+        Self {
+            stream_tx,
+            bidirectional_supported,
+            use_global_registry: true,
+            provenance,
+            plexus_hash,
+        }
+    }
+
+    /// Create a multi-type bidirectional channel that uses direct response handling
+    ///
+    /// Responses must be delivered via `handle_response()` method.
+    /// Use this for testing or when you have direct access to the channel for responses.
+    pub fn new_direct(
+        stream_tx: mpsc::Sender<PlexusStreamItem>,
+        bidirectional_supported: bool,
+        provenance: Vec<String>,
+        plexus_hash: String,
+    ) -> Self {
+        Self {
+            stream_tx,
+            bidirectional_supported,
+            use_global_registry: false,
+            provenance,
+            plexus_hash,
+        }
+    }
+
+    /// Check if bidirectional communication is supported
+    pub fn is_bidirectional(&self) -> bool {
+        self.bidirectional_supported
+    }
+
+    /// Make a generic bidirectional request with default timeout (30s)
+    ///
+    /// This method accepts any request type implementing [`BidirRequest`] and
+    /// returns any response type implementing [`BidirResponse`].
+    ///
+    /// # Type Parameters
+    ///
+    /// * `Req` - Request type (must implement `BidirRequest`)
+    /// * `Resp` - Expected response type (must implement `BidirResponse`)
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// let request = ConfirmRequest { message: "Delete?".into(), default: None };
+    /// let response: ConfirmedResponse = ctx.request(request).await?;
+    /// ```
+    pub async fn request<Req, Resp>(&self, req: Req) -> Result<Resp, BidirError>
+    where
+        Req: BidirRequest,
+        Resp: BidirResponse,
+    {
+        self.request_with_timeout(req, Duration::from_secs(30))
+            .await
+    }
+
+    /// Make a generic bidirectional request with custom timeout
+    pub async fn request_with_timeout<Req, Resp>(
+        &self,
+        req: Req,
+        timeout_duration: Duration,
+    ) -> Result<Resp, BidirError>
+    where
+        Req: BidirRequest,
+        Resp: BidirResponse,
+    {
+        if !self.bidirectional_supported {
+            return Err(BidirError::NotSupported);
+        }
+
+        // Generate unique request ID
+        let request_id = Uuid::new_v4().to_string();
+
+        // Serialize request and add type tag
+        let mut request_data = serde_json::to_value(&req)
+            .map_err(|e| BidirError::Serialization(e.to_string()))?;
+
+        // Add type tag for discrimination
+        if let Value::Object(ref mut map) = request_data {
+            map.insert("type".to_string(), Value::String(req.type_tag().to_string()));
+        }
+
+        let timeout_ms = timeout_duration.as_millis() as u64;
+
+        if self.use_global_registry {
+            self.request_via_registry(request_id, request_data, timeout_duration, timeout_ms)
+                .await
+        } else {
+            self.request_direct(request_id, request_data, timeout_duration, timeout_ms)
+                .await
+        }
+    }
+
+    /// Request using global registry (for MCP transport via _plexus_respond tool)
+    async fn request_via_registry<Resp>(
+        &self,
+        request_id: String,
+        request_data: Value,
+        timeout_duration: Duration,
+        timeout_ms: u64,
+    ) -> Result<Resp, BidirError>
+    where
+        Resp: BidirResponse,
+    {
+        // Create oneshot channel for Value response (type-erased)
+        let (tx, rx) = oneshot::channel::<Value>();
+
+        // Register in global registry
+        register_pending_request(request_id.clone(), tx);
+
+        // Send Request stream item
+        if let Err(e) = self
+            .stream_tx
+            .send(PlexusStreamItem::request(
+                request_id.clone(),
+                request_data,
+                timeout_ms,
+            ))
+            .await
+        {
+            // Clean up on failure
+            unregister_pending_request(&request_id);
+            return Err(BidirError::Transport(format!("Failed to send request: {}", e)));
+        }
+
+        // Wait for response (or timeout)
+        match timeout(timeout_duration, rx).await {
+            Ok(Ok(value)) => {
+                // Deserialize Value to typed response
+                serde_json::from_value(value).map_err(|e| BidirError::TypeMismatch {
+                    expected: std::any::type_name::<Resp>().to_string(),
+                    got: e.to_string(),
+                })
+            }
+            Ok(Err(_)) => {
+                // Channel closed before response
+                unregister_pending_request(&request_id);
+                Err(BidirError::ChannelClosed)
+            }
+            Err(_) => {
+                // Timeout - clean up from registry
+                unregister_pending_request(&request_id);
+                Err(BidirError::Timeout(timeout_ms))
+            }
+        }
+    }
+
+    /// Request using direct response handling (for testing/WebSocket)
+    async fn request_direct<Resp>(
+        &self,
+        request_id: String,
+        request_data: Value,
+        timeout_duration: Duration,
+        timeout_ms: u64,
+    ) -> Result<Resp, BidirError>
+    where
+        Resp: BidirResponse,
+    {
+        // For direct mode, we need to use a typed channel
+        // This is a limitation - direct mode requires type-specific handling
+        // In practice, this is only used for testing where we control the response type
+
+        // Create oneshot channel for typed response
+        let (tx, rx) = oneshot::channel::<Value>();
+
+        // Register in a local map (we'll use Arc<Mutex<HashMap>> for this)
+        // For now, we'll use the global registry even in direct mode
+        register_pending_request(request_id.clone(), tx);
+
+        // Send Request stream item
+        self.stream_tx
+            .send(PlexusStreamItem::request(
+                request_id.clone(),
+                request_data,
+                timeout_ms,
+            ))
+            .await
+            .map_err(|e| BidirError::Transport(format!("Failed to send request: {}", e)))?;
+
+        // Wait for response (or timeout)
+        match timeout(timeout_duration, rx).await {
+            Ok(Ok(value)) => {
+                serde_json::from_value(value).map_err(|e| BidirError::TypeMismatch {
+                    expected: std::any::type_name::<Resp>().to_string(),
+                    got: e.to_string(),
+                })
+            }
+            Ok(Err(_)) => {
+                unregister_pending_request(&request_id);
+                Err(BidirError::ChannelClosed)
+            }
+            Err(_) => {
+                unregister_pending_request(&request_id);
+                Err(BidirError::Timeout(timeout_ms))
+            }
+        }
+    }
+
+    /// Get provenance path (for debugging)
+    pub fn provenance(&self) -> &[String] {
+        &self.provenance
+    }
+
+    /// Get plexus hash (for metadata)
+    pub fn plexus_hash(&self) -> &str {
+        &self.plexus_hash
+    }
+
+    // =============================================================================
+    // Convenience methods for well-known types
+    // =============================================================================
+
+    /// Ask user for yes/no confirmation
+    ///
+    /// Convenience method that creates a [`ConfirmRequest`] and extracts the boolean value.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// if ctx.confirm("Delete this file?").await? {
+    ///     // user confirmed
+    /// }
+    /// ```
+    pub async fn confirm(&self, message: impl Into<String>) -> Result<bool, BidirError> {
+        let request = ConfirmRequest {
+            message: message.into(),
+            default: None,
+        };
+        let response: ConfirmedResponse = self.request(request).await?;
+        Ok(response.value)
+    }
+
+    /// Ask user for text input
+    ///
+    /// Convenience method that creates a [`PromptRequest`] and extracts the string value.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// let name = ctx.prompt("Enter your name:").await?;
+    /// ```
+    pub async fn prompt(&self, message: impl Into<String>) -> Result<String, BidirError> {
+        let request = PromptRequest {
+            message: message.into(),
+            default: None,
+            placeholder: None,
+        };
+        let response: TextResponse = self.request(request).await?;
+        Ok(response.value)
+    }
+
+    /// Ask user to select from options
+    ///
+    /// Convenience method that creates a [`SelectRequest`] and extracts the selected values.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// let options = vec![
+    ///     SelectOption::new("dev", "Development"),
+    ///     SelectOption::new("prod", "Production"),
+    /// ];
+    /// let selected = ctx.select("Choose environment:", options).await?;
+    /// ```
+    pub async fn select(
+        &self,
+        message: impl Into<String>,
+        options: Vec<SelectOption>,
+    ) -> Result<Vec<String>, BidirError> {
+        let request = super::types::SelectRequest {
+            message: message.into(),
+            options,
+            multi_select: false,
+        };
+        let response: SelectedResponse = self.request(request).await?;
+        Ok(response.values)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -776,5 +1136,102 @@ mod tests {
             .await;
 
         assert_eq!(resp, StandardResponse::Confirmed { value: false });
+    }
+
+    #[tokio::test]
+    async fn test_multi_bidir_channel_not_supported() {
+        let (tx, _rx) = mpsc::channel(32);
+        let channel = MultiBidirChannel::new_direct(tx, false, vec!["test".into()], "hash".into());
+
+        let result = channel.confirm("Test?").await;
+        assert!(matches!(result, Err(BidirError::NotSupported)));
+    }
+
+    #[tokio::test]
+    async fn test_multi_bidir_channel_confirm() {
+        use crate::plexus::bidirectional::registry::handle_pending_response;
+        use crate::plexus::bidirectional::types::{ConfirmRequest, ConfirmedResponse};
+
+        let (tx, mut rx) = mpsc::channel(32);
+        let channel = Arc::new(MultiBidirChannel::new_direct(
+            tx,
+            true,
+            vec!["test".into()],
+            "hash".into(),
+        ));
+
+        // Spawn request in background
+        let channel_clone = channel.clone();
+        let handle: tokio::task::JoinHandle<Result<ConfirmedResponse, BidirError>> =
+            tokio::spawn(async move {
+                let req = ConfirmRequest {
+                    message: "Test?".into(),
+                    default: None,
+                };
+                channel_clone.request::<_, ConfirmedResponse>(req).await
+            });
+
+        // Receive request
+        if let Some(PlexusStreamItem::Request {
+            request_id,
+            request_data,
+            ..
+        }) = rx.recv().await
+        {
+            // Verify request has type tag
+            assert_eq!(request_data["type"], "confirm");
+            assert_eq!(request_data["message"], "Test?");
+
+            // Send response via global registry
+            let response = ConfirmedResponse { value: true };
+            let response_json = serde_json::to_value(&response).unwrap();
+            handle_pending_response(&request_id, response_json).unwrap();
+        } else {
+            panic!("Expected Request item");
+        }
+
+        // Verify response received
+        let result: ConfirmedResponse = handle.await.unwrap().unwrap();
+        assert_eq!(result.value, true);
+    }
+
+    #[tokio::test]
+    async fn test_multi_bidir_channel_convenience_methods() {
+        use crate::plexus::bidirectional::registry::handle_pending_response;
+        use crate::plexus::bidirectional::types::{ConfirmedResponse, TextResponse};
+
+        let (tx, mut rx) = mpsc::channel(32);
+        let channel = Arc::new(MultiBidirChannel::new_direct(
+            tx,
+            true,
+            vec!["test".into()],
+            "hash".into(),
+        ));
+
+        // Test confirm convenience method
+        let channel_clone = channel.clone();
+        let handle = tokio::spawn(async move { channel_clone.confirm("Delete?").await });
+
+        if let Some(PlexusStreamItem::Request { request_id, .. }) = rx.recv().await {
+            let response = ConfirmedResponse { value: true };
+            let response_json = serde_json::to_value(&response).unwrap();
+            handle_pending_response(&request_id, response_json).unwrap();
+        }
+
+        assert_eq!(handle.await.unwrap().unwrap(), true);
+
+        // Test prompt convenience method
+        let channel_clone = channel.clone();
+        let handle = tokio::spawn(async move { channel_clone.prompt("Name?").await });
+
+        if let Some(PlexusStreamItem::Request { request_id, .. }) = rx.recv().await {
+            let response = TextResponse {
+                value: "Alice".into(),
+            };
+            let response_json = serde_json::to_value(&response).unwrap();
+            handle_pending_response(&request_id, response_json).unwrap();
+        }
+
+        assert_eq!(handle.await.unwrap().unwrap(), "Alice");
     }
 }

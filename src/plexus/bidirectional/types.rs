@@ -6,21 +6,40 @@
 //!
 //! # Type System
 //!
-//! The bidirectional system uses a **generic type design** that separates:
+//! The bidirectional system now uses a **trait-based design**:
 //!
-//! 1. **Standard types** ([`StandardRequest`]/[`StandardResponse`]) for common UI patterns
-//! 2. **Custom types** that activations can define for domain-specific interactions
+//! 1. **Trait-based protocol** ([`BidirRequest`]/[`BidirResponse`]) - Core traits
+//! 2. **Well-known types** - Plain structs for common UI patterns (Confirm, Prompt, Select)
+//! 3. **Union types** - Enums for backwards compatibility ([`WellKnownRequest`]/[`WellKnownResponse`])
+//! 4. **Legacy types** - Deprecated enum-based types ([`StandardRequest`]/[`StandardResponse`])
+//!
+//! # Migration Guide
+//!
+//! **Old (enum-based)**:
+//! ```rust,ignore
+//! let resp = ctx.request(StandardRequest::Confirm {
+//!     message: "Delete?".into(),
+//!     default: None,
+//! }).await?;
+//! ```
+//!
+//! **New (trait-based)**:
+//! ```rust,ignore
+//! let resp = ctx.request(ConfirmRequest {
+//!     message: "Delete?".into(),
+//!     default: None,
+//! }).await?;
+//! ```
 //!
 //! # Wire Format
 //!
-//! All types use `serde` for serialization. The standard types use internally-tagged
-//! enums for JSON-friendly wire format:
+//! All types use `serde` for serialization with internally-tagged JSON:
 //!
 //! ```json
-//! // StandardRequest::Confirm
+//! // ConfirmRequest
 //! { "type": "confirm", "message": "Delete file?", "default": false }
 //!
-//! // StandardResponse::Confirmed
+//! // ConfirmedResponse
 //! { "type": "confirmed", "value": true }
 //! ```
 //!
@@ -34,6 +53,8 @@
 
 use schemars::JsonSchema;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
+
+use super::protocol::{BidirRequest, BidirResponse};
 
 /// Error types for bidirectional communication
 ///
@@ -154,7 +175,359 @@ pub enum BidirError {
     ChannelClosed,
 }
 
+// =============================================================================
+// Well-Known Request Types (Plain Structs)
+// =============================================================================
+
+/// Binary yes/no confirmation request.
+///
+/// Use this for important decisions like:
+/// - Confirming destructive operations ("Delete 3 files?")
+/// - Proceeding with potentially expensive operations
+/// - Accepting terms or conditions
+///
+/// # Wire Format
+///
+/// ```json
+/// {
+///   "type": "confirm",
+///   "message": "Delete file?",
+///   "default": false
+/// }
+/// ```
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use plexus_core::plexus::bidirectional::{ConfirmRequest, ConfirmedResponse};
+///
+/// let request = ConfirmRequest {
+///     message: "Delete this file?".into(),
+///     default: Some(false),
+/// };
+/// let response: ConfirmedResponse = ctx.request(request).await?;
+/// if response.value {
+///     // User confirmed
+/// }
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
+pub struct ConfirmRequest {
+    /// Question to ask the user.
+    /// Should be a clear yes/no question.
+    pub message: String,
+
+    /// Default answer if user accepts without explicit choice.
+    /// - `Some(true)` = default to "yes"
+    /// - `Some(false)` = default to "no"
+    /// - `None` = require explicit choice
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default: Option<bool>,
+}
+
+impl BidirRequest for ConfirmRequest {
+    fn type_tag(&self) -> &'static str {
+        "confirm"
+    }
+}
+
+/// Free-form text input request.
+///
+/// Use this for collecting:
+/// - Names, titles, identifiers
+/// - Paths, URLs
+/// - Custom values not in a predefined list
+///
+/// # Wire Format
+///
+/// ```json
+/// {
+///   "type": "prompt",
+///   "message": "Enter project name:",
+///   "default": "my-project",
+///   "placeholder": "project-name"
+/// }
+/// ```
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use plexus_core::plexus::bidirectional::{PromptRequest, TextResponse};
+///
+/// let request = PromptRequest {
+///     message: "Enter your name:".into(),
+///     default: None,
+///     placeholder: Some("John Doe".into()),
+/// };
+/// let response: TextResponse = ctx.request(request).await?;
+/// println!("User entered: {}", response.value);
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
+pub struct PromptRequest {
+    /// Prompt message shown to the user.
+    pub message: String,
+
+    /// Default value to pre-fill in the input.
+    /// User can accept or modify.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default: Option<String>,
+
+    /// Placeholder text shown when input is empty.
+    /// Provides a hint about expected format.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub placeholder: Option<String>,
+}
+
+impl BidirRequest for PromptRequest {
+    fn type_tag(&self) -> &'static str {
+        "prompt"
+    }
+}
+
+/// Selection request for choosing from options.
+///
+/// Use this when the valid choices are known ahead of time.
+/// Supports both single and multiple selection.
+///
+/// # Wire Format
+///
+/// ```json
+/// {
+///   "type": "select",
+///   "message": "Choose environment:",
+///   "options": [
+///     { "value": "dev", "label": "Development", "description": "Local dev" },
+///     { "value": "prod", "label": "Production" }
+///   ],
+///   "multiSelect": false
+/// }
+/// ```
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use plexus_core::plexus::bidirectional::{SelectRequest, SelectOption, SelectedResponse};
+///
+/// let request = SelectRequest {
+///     message: "Choose environment:".into(),
+///     options: vec![
+///         SelectOption::new("dev", "Development")
+///             .with_description("Local development environment"),
+///         SelectOption::new("prod", "Production")
+///             .with_description("Live environment"),
+///     ],
+///     multi_select: false,
+/// };
+/// let response: SelectedResponse = ctx.request(request).await?;
+/// println!("Selected: {:?}", response.values);
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
+pub struct SelectRequest {
+    /// Selection prompt shown to the user.
+    pub message: String,
+
+    /// Available options to choose from.
+    /// Each option has a value (returned) and label (displayed).
+    pub options: Vec<SelectOption>,
+
+    /// Whether to allow selecting multiple options.
+    /// - `false` (default): single selection, returns one value
+    /// - `true`: multiple selection, returns zero or more values
+    #[serde(default, rename = "multiSelect")]
+    pub multi_select: bool,
+}
+
+impl BidirRequest for SelectRequest {
+    fn type_tag(&self) -> &'static str {
+        "select"
+    }
+}
+
+// =============================================================================
+// Well-Known Response Types (Plain Structs)
+// =============================================================================
+
+/// User confirmed (true) or declined (false).
+///
+/// Response to [`ConfirmRequest`].
+/// - `value: true` = user said yes
+/// - `value: false` = user said no
+///
+/// # Wire Format
+///
+/// ```json
+/// { "type": "confirmed", "value": true }
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
+pub struct ConfirmedResponse {
+    /// Whether the user confirmed (true) or declined (false)
+    pub value: bool,
+}
+
+impl BidirResponse for ConfirmedResponse {
+    fn type_tag(&self) -> &'static str {
+        "confirmed"
+    }
+}
+
+/// User entered text or provided a value.
+///
+/// Response to [`PromptRequest`].
+/// May be empty if user submitted without entering text.
+///
+/// # Wire Format
+///
+/// ```json
+/// { "type": "text", "value": "user input" }
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
+pub struct TextResponse {
+    /// The value entered or provided by the user
+    pub value: String,
+}
+
+impl BidirResponse for TextResponse {
+    fn type_tag(&self) -> &'static str {
+        "text"
+    }
+}
+
+/// User selected one or more options (by value).
+///
+/// Response to [`SelectRequest`].
+/// Contains the `value` field(s) from selected options.
+///
+/// - For single-select: vector with exactly one element
+/// - For multi-select: vector with zero or more elements
+///
+/// # Wire Format
+///
+/// ```json
+/// { "type": "selected", "values": ["dev", "staging"] }
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
+pub struct SelectedResponse {
+    /// The values of selected options
+    pub values: Vec<String>,
+}
+
+impl BidirResponse for SelectedResponse {
+    fn type_tag(&self) -> &'static str {
+        "selected"
+    }
+}
+
+/// User cancelled the request.
+///
+/// Can be sent in response to any request type.
+/// Indicates the user chose to abort rather than respond.
+/// This is different from declining (ConfirmedResponse { value: false }) - cancel
+/// means "don't proceed with the workflow at all".
+///
+/// # Wire Format
+///
+/// ```json
+/// { "type": "cancelled" }
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
+pub struct CancelledResponse {}
+
+impl BidirResponse for CancelledResponse {
+    fn type_tag(&self) -> &'static str {
+        "cancelled"
+    }
+}
+
+// =============================================================================
+// Well-Known Union Types (for convenience)
+// =============================================================================
+
+/// Union type of all well-known request types.
+///
+/// This enum provides a convenient way to work with all well-known request types
+/// when you need to handle multiple types in a single context. It's useful for:
+/// - Testing with auto-responders
+/// - Generic request handlers
+/// - Backwards compatibility with enum-based code
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use plexus_core::plexus::bidirectional::WellKnownRequest;
+///
+/// let request = WellKnownRequest::Confirm(ConfirmRequest {
+///     message: "Continue?".into(),
+///     default: None,
+/// });
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
+#[serde(tag = "type", rename_all = "lowercase")]
+pub enum WellKnownRequest {
+    /// Confirmation request
+    Confirm(ConfirmRequest),
+    /// Text prompt request
+    Prompt(PromptRequest),
+    /// Selection request
+    Select(SelectRequest),
+}
+
+impl BidirRequest for WellKnownRequest {
+    fn type_tag(&self) -> &'static str {
+        match self {
+            WellKnownRequest::Confirm(_) => "confirm",
+            WellKnownRequest::Prompt(_) => "prompt",
+            WellKnownRequest::Select(_) => "select",
+        }
+    }
+}
+
+/// Union type of all well-known response types.
+///
+/// This enum provides a convenient way to work with all well-known response types
+/// when you need to handle multiple types in a single context.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use plexus_core::plexus::bidirectional::WellKnownResponse;
+///
+/// let response = WellKnownResponse::Confirmed(ConfirmedResponse { value: true });
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
+#[serde(tag = "type", rename_all = "lowercase")]
+pub enum WellKnownResponse {
+    /// Confirmation response
+    Confirmed(ConfirmedResponse),
+    /// Text input response
+    Text(TextResponse),
+    /// Selection response
+    Selected(SelectedResponse),
+    /// Cancellation response
+    Cancelled(CancelledResponse),
+}
+
+impl BidirResponse for WellKnownResponse {
+    fn type_tag(&self) -> &'static str {
+        match self {
+            WellKnownResponse::Confirmed(_) => "confirmed",
+            WellKnownResponse::Text(_) => "text",
+            WellKnownResponse::Selected(_) => "selected",
+            WellKnownResponse::Cancelled(_) => "cancelled",
+        }
+    }
+}
+
+// =============================================================================
+// Legacy Types (Deprecated - for backwards compatibility)
+// =============================================================================
+
 /// Standard request types for common interactive UI patterns.
+///
+/// **DEPRECATED**: This enum-based type is maintained for backwards compatibility.
+/// New code should use the trait-based types instead:
+/// - [`ConfirmRequest`] instead of `StandardRequest::Confirm`
+/// - [`PromptRequest`] instead of `StandardRequest::Prompt`
+/// - [`SelectRequest`] instead of `StandardRequest::Select`
+/// - Or implement [`BidirRequest`] for custom types
 ///
 /// These request types cover the most common server-to-client interactions:
 ///
@@ -167,8 +540,8 @@ pub enum BidirError {
 /// Use a custom type for domain-specific interactions.
 ///
 /// For domain-specific interactions (e.g., image quality selection, custom
-/// dialogs), define your own request/response enums and use
-/// [`BidirChannel<YourRequest, YourResponse>`](super::BidirChannel).
+/// dialogs), define your own request/response types and implement the
+/// [`BidirRequest`] trait.
 ///
 /// # Wire Format
 ///
@@ -212,6 +585,10 @@ pub enum BidirError {
 /// | `prompt` | Text input field |
 /// | `select` | Dropdown, radio buttons, or checkbox list |
 /// | `custom` | Application-defined |
+#[deprecated(
+    since = "0.2.0",
+    note = "Use ConfirmRequest, PromptRequest, SelectRequest, or implement BidirRequest for custom types"
+)]
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
 #[serde(
     tag = "type",
@@ -314,6 +691,14 @@ where
 
 /// Standard response types matching [`StandardRequest`].
 ///
+/// **DEPRECATED**: This enum-based type is maintained for backwards compatibility.
+/// New code should use the trait-based types instead:
+/// - [`ConfirmedResponse`] instead of `StandardResponse::Confirmed`
+/// - [`TextResponse`] instead of `StandardResponse::Text`
+/// - [`SelectedResponse`] instead of `StandardResponse::Selected`
+/// - [`CancelledResponse`] instead of `StandardResponse::Cancelled`
+/// - Or implement [`BidirResponse`] for custom types
+///
 /// Each variant corresponds to a request type:
 ///
 /// | Request | Response |
@@ -334,6 +719,10 @@ where
 /// { "type": "selected", "values": ["dev"] }
 /// { "type": "cancelled" }
 /// ```
+#[deprecated(
+    since = "0.2.0",
+    note = "Use ConfirmedResponse, TextResponse, SelectedResponse, CancelledResponse, or implement BidirResponse for custom types"
+)]
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
 #[serde(
     tag = "type",
@@ -645,5 +1034,156 @@ mod tests {
         let json = serde_json::to_value(&resp).unwrap();
         assert_eq!(json["type"], "custom");
         assert_eq!(json["data"]["result"], "ok");
+    }
+
+    // =============================================================================
+    // Tests for new trait-based types
+    // =============================================================================
+
+    #[test]
+    fn test_confirm_request() {
+        let req = ConfirmRequest {
+            message: "Delete file?".into(),
+            default: Some(false),
+        };
+
+        assert_eq!(req.type_tag(), "confirm");
+
+        let json = serde_json::to_value(&req).unwrap();
+        assert_eq!(json["message"], "Delete file?");
+        assert_eq!(json["default"], false);
+
+        let roundtrip: ConfirmRequest = serde_json::from_value(json).unwrap();
+        assert_eq!(roundtrip, req);
+    }
+
+    #[test]
+    fn test_prompt_request() {
+        let req = PromptRequest {
+            message: "Enter name:".into(),
+            default: Some("John".into()),
+            placeholder: Some("Your name".into()),
+        };
+
+        assert_eq!(req.type_tag(), "prompt");
+
+        let json = serde_json::to_value(&req).unwrap();
+        assert_eq!(json["message"], "Enter name:");
+        assert_eq!(json["default"], "John");
+        assert_eq!(json["placeholder"], "Your name");
+
+        let roundtrip: PromptRequest = serde_json::from_value(json).unwrap();
+        assert_eq!(roundtrip, req);
+    }
+
+    #[test]
+    fn test_select_request() {
+        let req = SelectRequest {
+            message: "Choose option:".into(),
+            options: vec![
+                SelectOption::new("a", "Option A"),
+                SelectOption::new("b", "Option B").with_description("Second option"),
+            ],
+            multi_select: false,
+        };
+
+        assert_eq!(req.type_tag(), "select");
+
+        let json = serde_json::to_value(&req).unwrap();
+        assert_eq!(json["message"], "Choose option:");
+        assert_eq!(json["options"][0]["value"], "a");
+        assert_eq!(json["options"][0]["label"], "Option A");
+        assert_eq!(json["options"][1]["description"], "Second option");
+        assert_eq!(json["multiSelect"], false);
+
+        let roundtrip: SelectRequest = serde_json::from_value(json).unwrap();
+        assert_eq!(roundtrip, req);
+    }
+
+    #[test]
+    fn test_confirmed_response() {
+        let resp = ConfirmedResponse { value: true };
+
+        assert_eq!(resp.type_tag(), "confirmed");
+
+        let json = serde_json::to_value(&resp).unwrap();
+        assert_eq!(json["value"], true);
+
+        let roundtrip: ConfirmedResponse = serde_json::from_value(json).unwrap();
+        assert_eq!(roundtrip, resp);
+    }
+
+    #[test]
+    fn test_text_response() {
+        let resp = TextResponse {
+            value: "Hello".into(),
+        };
+
+        assert_eq!(resp.type_tag(), "text");
+
+        let json = serde_json::to_value(&resp).unwrap();
+        assert_eq!(json["value"], "Hello");
+
+        let roundtrip: TextResponse = serde_json::from_value(json).unwrap();
+        assert_eq!(roundtrip, resp);
+    }
+
+    #[test]
+    fn test_selected_response() {
+        let resp = SelectedResponse {
+            values: vec!["a".into(), "b".into()],
+        };
+
+        assert_eq!(resp.type_tag(), "selected");
+
+        let json = serde_json::to_value(&resp).unwrap();
+        assert_eq!(json["values"][0], "a");
+        assert_eq!(json["values"][1], "b");
+
+        let roundtrip: SelectedResponse = serde_json::from_value(json).unwrap();
+        assert_eq!(roundtrip, resp);
+    }
+
+    #[test]
+    fn test_cancelled_response() {
+        let resp = CancelledResponse {};
+
+        assert_eq!(resp.type_tag(), "cancelled");
+
+        let json = serde_json::to_value(&resp).unwrap();
+        // Should be an empty object or just type tag
+        let roundtrip: CancelledResponse = serde_json::from_value(json).unwrap();
+        assert_eq!(roundtrip, resp);
+    }
+
+    #[test]
+    fn test_well_known_request_enum() {
+        let req = WellKnownRequest::Confirm(ConfirmRequest {
+            message: "Test?".into(),
+            default: None,
+        });
+
+        assert_eq!(req.type_tag(), "confirm");
+
+        let json = serde_json::to_value(&req).unwrap();
+        assert_eq!(json["type"], "confirm");
+        assert_eq!(json["message"], "Test?");
+
+        let roundtrip: WellKnownRequest = serde_json::from_value(json).unwrap();
+        assert_eq!(roundtrip, req);
+    }
+
+    #[test]
+    fn test_well_known_response_enum() {
+        let resp = WellKnownResponse::Confirmed(ConfirmedResponse { value: true });
+
+        assert_eq!(resp.type_tag(), "confirmed");
+
+        let json = serde_json::to_value(&resp).unwrap();
+        assert_eq!(json["type"], "confirmed");
+        assert_eq!(json["value"], true);
+
+        let roundtrip: WellKnownResponse = serde_json::from_value(json).unwrap();
+        assert_eq!(roundtrip, resp);
     }
 }

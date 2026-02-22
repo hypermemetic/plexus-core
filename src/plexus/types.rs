@@ -92,6 +92,56 @@ pub enum PlexusStreamItem {
         timeout_ms: u64,
     },
 
+    /// Stream completed successfully
+    Done {
+        /// Metadata from calling layer
+        metadata: StreamMetadata,
+    },
+}
+
+impl PlexusStreamItem {
+    /// Create a Data item
+    pub fn data(metadata: StreamMetadata, content_type: String, content: Value) -> Self {
+        Self::Data {
+            metadata,
+            content_type,
+            content,
+        }
+    }
+
+    /// Create a Progress item
+    pub fn progress(metadata: StreamMetadata, message: String, percentage: Option<f32>) -> Self {
+        Self::Progress {
+            metadata,
+            message,
+            percentage,
+        }
+    }
+
+    /// Create an Error item
+    pub fn error(
+        metadata: StreamMetadata,
+        message: String,
+        code: Option<String>,
+        recoverable: bool,
+    ) -> Self {
+        Self::Error {
+            metadata,
+            message,
+            code,
+            recoverable,
+        }
+    }
+
+    /// Create a Request item
+    pub fn request(request_id: String, request_data: Value, timeout_ms: u64) -> Self {
+        Self::Request {
+            request_id,
+            request_data,
+            timeout_ms,
+        }
+    }
+
     /// Create a Done item
     pub fn done(metadata: StreamMetadata) -> Self {
         Self::Done { metadata }

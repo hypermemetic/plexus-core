@@ -124,6 +124,79 @@ fn plexus_to_mcp_error(e: PlexusError) -> McpError {
     }
 }
 
+// =============================================================================
+// Plexus MCP Bridge
+// =============================================================================
+
+/// MCP handler that bridges to Plexus RPC hub
+#[derive(Clone)]
+pub struct PlexusMcpBridge {
+    hub: Arc<DynamicHub>,
+}
+
+impl PlexusMcpBridge {
+    pub fn new(hub: Arc<DynamicHub>) -> Self {
+        Self { hub }
+    }
+
+    /// Handle the _plexus_respond tool call
+    ///
+    /// Routes the response back to the waiting BidirChannel via the global registry.
+    async fn handle_plexus_respond(
+        &self,
+        request: CallToolRequestParam,
+    ) -> Result<CallToolResult, McpError> {
+        let arguments = request
+            .arguments
+            .map(serde_json::Value::Object)
+            .unwrap_or(json!({}));
+
+        // Extract request_id and response_data
+        let request_id = arguments
+            .get("request_id")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| McpError::invalid_params("Missing required parameter: request_id", None))?
+            .to_string();
+
+        let response_data = arguments
+            .get("response_data")
+            .cloned()
+            .ok_or_else(|| {
+                McpError::invalid_params("Missing required parameter: response_data", None)
+            })?;
+
+        tracing::debug!(
+            request_id = %request_id,
+            "Handling _plexus_respond"
+        );
+
+        // Forward response through global registry
+        match handle_pending_response(&request_id, response_data) {
+            Ok(()) => Ok(CallToolResult::success(vec![Content::text(
+                "Response delivered successfully",
+            )])),
+            Err(BidirError::UnknownRequest) => {
+                tracing::warn!(request_id = %request_id, "Unknown request ID in _plexus_respond");
+                Err(McpError::invalid_params(
+                    format!("Unknown request ID: {}. The request may have timed out or been cancelled.", request_id),
+                    None,
+                ))
+            }
+            Err(BidirError::ChannelClosed) => {
+                tracing::warn!(request_id = %request_id, "Channel closed in _plexus_respond");
+                Err(McpError::internal_error(
+                    "Response channel was closed (request may have timed out)",
+                    None,
+                ))
+            }
+            Err(e) => {
+                tracing::error!(request_id = %request_id, error = ?e, "Error in _plexus_respond");
+                Err(McpError::internal_error(format!("Failed to deliver response: {}", e), None))
+            }
+        }
+    }
+}
+
 impl ServerHandler for PlexusMcpBridge {
     fn get_info(&self) -> ServerInfo {
         ServerInfo {
@@ -168,6 +241,22 @@ impl ServerHandler for PlexusMcpBridge {
             return self.handle_plexus_respond(request).await;
         }
 
+        let arguments = request
+            .arguments
+            .map(serde_json::Value::Object)
+            .unwrap_or(json!({}));
+
+        tracing::debug!("Calling tool: {} with args: {:?}", method_name, arguments);
+
+        // Get progress token if provided
+        let progress_token = ctx.meta.get_progress_token();
+
+        // Logger name: plexus.namespace.method (e.g., plexus.bash.execute)
+        let logger = format!("plexus.{}", method_name);
+
+        // Call Plexus RPC hub and get stream
+        let stream = self
+            .hub
             .route(method_name, arguments)
             .await
             .map_err(plexus_to_mcp_error)?;

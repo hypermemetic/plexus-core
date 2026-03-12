@@ -19,7 +19,7 @@ use jsonrpsee::core::server::Methods;
 use jsonrpsee::RpcModule;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -96,6 +96,43 @@ impl std::fmt::Display for PlexusError {
 }
 
 impl std::error::Error for PlexusError {}
+
+/// Convert a `PlexusError` into a JSON-RPC `ErrorObjectOwned` with the
+/// correct standard error code, a message that includes the called method
+/// name, and a structured `data` object clients can inspect.
+///
+/// This is the single canonical mapping point — all `.call` subscription
+/// handlers use this function so the behaviour is consistent.
+fn plexus_error_to_rpc(method: &str, e: PlexusError) -> jsonrpsee::types::ErrorObjectOwned {
+    let (code, msg, data) = match e {
+        PlexusError::ActivationNotFound(ref name) => (
+            -32601_i32,
+            format!("Activation '{}' not found (method: {})", name, method),
+            json!({ "type": "activation_not_found", "activation": name, "method": method }),
+        ),
+        PlexusError::MethodNotFound { ref activation, method: ref m } => (
+            -32601_i32,
+            format!("Method '{}.{}' not found", activation, m),
+            json!({ "type": "method_not_found", "activation": activation, "method": m }),
+        ),
+        PlexusError::InvalidParams(ref detail) => (
+            -32602_i32,
+            format!("Invalid params for '{}': {}", method, detail),
+            json!({ "type": "invalid_params", "method": method, "detail": detail }),
+        ),
+        PlexusError::ExecutionError(ref detail) => (
+            -32603_i32,
+            format!("Execution error in '{}': {}", method, detail),
+            json!({ "type": "execution_error", "method": method, "detail": detail }),
+        ),
+        ref other => (
+            -32000_i32,
+            format!("{} (method: {})", other, method),
+            json!({ "type": "transport_error", "method": method, "detail": other.to_string() }),
+        ),
+    };
+    jsonrpsee::types::ErrorObjectOwned::owned(code, msg, Some(data))
+}
 
 // ============================================================================
 // Schema Types
@@ -763,8 +800,35 @@ impl DynamicHub {
                 Box::pin(async move {
                     // Parse params: {"method": "...", "params": {...}}
                     let p: CallParams = params.parse()?;
-                    let stream = plexus.route(&p.method, p.params.unwrap_or_default()).await
-                        .map_err(|e| jsonrpsee::types::ErrorObject::owned(-32000, e.to_string(), None::<()>))?;
+                    let method_name = p.method.clone();
+                    let stream = match tokio::task::spawn({
+                        let plexus = plexus.clone();
+                        let method = p.method.clone();
+                        let route_params = p.params.unwrap_or_default();
+                        async move { plexus.route(&method, route_params).await }
+                    }).await {
+                        Ok(Ok(s))  => s,
+                        Ok(Err(e)) => {
+                            pending.reject(plexus_error_to_rpc(&method_name, e)).await;
+                            return Ok(());
+                        }
+                        Err(e) if e.is_panic() => {
+                            pending.reject(jsonrpsee::types::ErrorObjectOwned::owned(
+                                -32603_i32,
+                                format!("Plugin panicked in '{}'", method_name),
+                                Some(json!({ "type": "panic", "method": method_name })),
+                            )).await;
+                            return Ok(());
+                        }
+                        Err(e) => {
+                            pending.reject(jsonrpsee::types::ErrorObjectOwned::owned(
+                                -32603_i32,
+                                format!("Task error in '{}': {}", method_name, e),
+                                Some(json!({ "type": "task_error", "method": method_name })),
+                            )).await;
+                            return Ok(());
+                        }
+                    };
                     pipe_stream_to_subscription(pending, stream).await
                 })
             }
@@ -891,8 +955,35 @@ impl DynamicHub {
                 let hub = hub_for_call.clone();
                 Box::pin(async move {
                     let p: CallParams = params.parse()?;
-                    let stream = hub.route(&p.method, p.params.unwrap_or_default()).await
-                        .map_err(|e| jsonrpsee::types::ErrorObject::owned(-32000, e.to_string(), None::<()>))?;
+                    let method_name = p.method.clone();
+                    let stream = match tokio::task::spawn({
+                        let hub = hub.clone();
+                        let method = p.method.clone();
+                        let route_params = p.params.unwrap_or_default();
+                        async move { hub.route(&method, route_params).await }
+                    }).await {
+                        Ok(Ok(s))  => s,
+                        Ok(Err(e)) => {
+                            pending.reject(plexus_error_to_rpc(&method_name, e)).await;
+                            return Ok(());
+                        }
+                        Err(e) if e.is_panic() => {
+                            pending.reject(jsonrpsee::types::ErrorObjectOwned::owned(
+                                -32603_i32,
+                                format!("Plugin panicked in '{}'", method_name),
+                                Some(json!({ "type": "panic", "method": method_name })),
+                            )).await;
+                            return Ok(());
+                        }
+                        Err(e) => {
+                            pending.reject(jsonrpsee::types::ErrorObjectOwned::owned(
+                                -32603_i32,
+                                format!("Task error in '{}': {}", method_name, e),
+                                Some(json!({ "type": "task_error", "method": method_name })),
+                            )).await;
+                            return Ok(());
+                        }
+                    };
                     pipe_stream_to_subscription(pending, stream).await
                 })
             }

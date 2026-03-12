@@ -42,10 +42,21 @@ pub fn wrap_stream<T: Serialize + Send + 'static>(
     let metadata = StreamMetadata::new(provenance.clone(), plexus_hash.clone());
     let done_metadata = StreamMetadata::new(provenance, plexus_hash);
 
-    let data_stream = stream.map(move |item| PlexusStreamItem::Data {
-        metadata: metadata.clone(),
-        content_type: content_type.to_string(),
-        content: serde_json::to_value(item).expect("serialization failed"),
+    let data_stream = stream.map(move |item| {
+        let metadata = metadata.clone();
+        match serde_json::to_value(item) {
+            Ok(content) => PlexusStreamItem::Data {
+                metadata,
+                content_type: content_type.to_string(),
+                content,
+            },
+            Err(e) => PlexusStreamItem::Error {
+                metadata,
+                message: format!("Serialization failed: {}", e),
+                code: None,
+                recoverable: false,
+            },
+        }
     });
 
     let done_stream = stream::once(async move { PlexusStreamItem::Done {
@@ -168,6 +179,65 @@ where
     let merged = wrap_fn(wrapped_user_stream);
 
     (ctx, merged)
+}
+
+/// Wrap a typed result stream into PlexusStream with automatic Done event.
+///
+/// Like `wrap_stream`, but the inner stream yields `Result<T, E>`.
+/// `Ok(item)` maps to `PlexusStreamItem::Data`; `Err(e)` maps to
+/// `PlexusStreamItem::Error`. A Done event is appended when the stream ends.
+///
+/// Use this with `async_stream::try_stream!` so that `?` inside the
+/// generator terminates the stream with an error item rather than panicking:
+///
+/// ```ignore
+/// let stream = async_stream::try_stream! {
+///     let config = load_config()?;   // propagates as Error item + Done
+///     yield MyEvent { data: config };
+/// };
+/// Ok(wrap_result_stream(stream, "my.event", vec!["my".into()]))
+/// ```
+pub fn wrap_result_stream<T, E>(
+    stream: impl Stream<Item = Result<T, E>> + Send + 'static,
+    content_type: &'static str,
+    provenance: Vec<String>,
+) -> PlexusStream
+where
+    T: Serialize + Send + 'static,
+    E: std::error::Error + Send + 'static,
+{
+    let plexus_hash = PlexusContext::hash();
+    let metadata = StreamMetadata::new(provenance.clone(), plexus_hash.clone());
+    let done_metadata = StreamMetadata::new(provenance, plexus_hash);
+
+    let data_stream = stream.map(move |result| {
+        let metadata = metadata.clone();
+        match result {
+            Ok(item) => match serde_json::to_value(item) {
+                Ok(content) => PlexusStreamItem::Data {
+                    metadata,
+                    content_type: content_type.to_string(),
+                    content,
+                },
+                Err(e) => PlexusStreamItem::Error {
+                    metadata,
+                    message: format!("Serialization failed: {}", e),
+                    code: None,
+                    recoverable: false,
+                },
+            },
+            Err(e) => PlexusStreamItem::Error {
+                metadata,
+                message: e.to_string(),
+                code: None,
+                recoverable: false,
+            },
+        }
+    });
+
+    let done_stream = stream::once(async move { PlexusStreamItem::Done { metadata: done_metadata } });
+
+    Box::pin(data_stream.chain(done_stream))
 }
 
 /// Create an error stream

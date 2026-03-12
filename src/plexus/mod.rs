@@ -4,10 +4,8 @@
 pub mod bidirectional;
 pub mod context;
 pub mod dispatch;
-pub mod errors;
 pub mod hub_context;
 pub mod method_enum;
-pub mod middleware;
 pub mod path;
 pub mod plexus;
 pub mod schema;
@@ -16,10 +14,6 @@ pub mod types;
 
 pub use bidirectional::{BidirChannel, BidirError, SelectOption, StandardBidirChannel, StandardRequest, StandardResponse};
 pub use context::PlexusContext;
-#[deprecated(note = "Use GuidanceErrorType and GuidanceSuggestion from stream events instead")]
-pub use errors::{GuidedError, GuidedErrorData, TryRequest};
-#[deprecated(note = "Middleware removed - guidance provided via PlexusStreamEvent::Guidance")]
-pub use middleware::{ActivationRegistry, GuidedErrorMiddleware};
 pub use path::Provenance;
 pub use plexus::{Activation, ActivationInfo, ChildRouter, DynamicHub, PlexusError, TransportErrorKind, route_to_child};
 pub use crate::types::Handle;

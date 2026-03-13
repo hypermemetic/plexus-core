@@ -17,6 +17,13 @@ use async_trait::async_trait;
 use futures::Stream;
 use jsonrpsee::core::server::Methods;
 use jsonrpsee::RpcModule;
+
+/// The JSON-RPC method name used in all plexus subscription notifications.
+///
+/// Every subscription registered by plexus (`.call`, `.hash`, `.schema`, `_info`)
+/// sends notifications with `"method": PLEXUS_NOTIF_METHOD` on the wire.
+/// Clients must match against this value when dispatching raw subscription frames.
+pub const PLEXUS_NOTIF_METHOD: &str = "result";
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -756,7 +763,7 @@ impl DynamicHub {
         let plexus_for_call = self.clone();
         module.register_subscription(
             call_method,
-            call_method,
+            PLEXUS_NOTIF_METHOD,
             call_unsub,
             move |params, pending, _ctx, _ext| {
                 let plexus = plexus_for_call.clone();
@@ -774,7 +781,7 @@ impl DynamicHub {
         let plexus_for_hash = self.clone();
         module.register_subscription(
             hash_method,
-            hash_method,
+            PLEXUS_NOTIF_METHOD,
             hash_unsub,
             move |_params, pending, _ctx, _ext| {
                 let plexus = plexus_for_hash.clone();
@@ -793,7 +800,7 @@ impl DynamicHub {
         let plexus_for_schema = self.clone();
         module.register_subscription(
             schema_method,
-            schema_method,
+            PLEXUS_NOTIF_METHOD,
             schema_unsub,
             move |params, pending, _ctx, _ext| {
                 let plexus = plexus_for_schema.clone();
@@ -826,7 +833,7 @@ impl DynamicHub {
         let backend_name = self.runtime_namespace().to_string();
         module.register_subscription(
             "_info",
-            "_info",
+            PLEXUS_NOTIF_METHOD,
             "_info_unsub",
             move |_params, pending, _ctx, _ext| {
                 let name = backend_name.clone();
@@ -902,7 +909,7 @@ impl DynamicHub {
         let hub_for_hash = hub.clone();
         module.register_subscription(
             hash_method,
-            hash_method,
+            PLEXUS_NOTIF_METHOD,
             hash_unsub,
             move |_params, pending, _ctx, _ext| {
                 let hub = hub_for_hash.clone();
@@ -921,7 +928,7 @@ impl DynamicHub {
         let hub_for_schema = hub.clone();
         module.register_subscription(
             schema_method,
-            schema_method,
+            PLEXUS_NOTIF_METHOD,
             schema_unsub,
             move |params, pending, _ctx, _ext| {
                 let hub = hub_for_schema.clone();
@@ -956,7 +963,7 @@ impl DynamicHub {
         let backend_name = hub.runtime_namespace().to_string();
         module.register_subscription(
             "_info",
-            "_info",
+            PLEXUS_NOTIF_METHOD,
             "_info_unsub",
             move |_params, pending, _ctx, _ext| {
                 let name = backend_name.clone();
@@ -1053,18 +1060,20 @@ struct RespondParams {
     response_data: Value,
 }
 
-/// Helper to pipe a PlexusStream to a subscription sink
+/// Helper to pipe a PlexusStream to a subscription sink.
+///
+/// Notifications are sent with `method: PLEXUS_NOTIF_METHOD` on the wire,
+/// as set by the `notif_method_name` arg in each `register_subscription` call.
 async fn pipe_stream_to_subscription(
     pending: jsonrpsee::PendingSubscriptionSink,
     mut stream: PlexusStream,
 ) -> jsonrpsee::core::SubscriptionResult {
     use futures::StreamExt;
-    use jsonrpsee::SubscriptionMessage;
 
     let sink = pending.accept().await?;
     while let Some(item) = stream.next().await {
-        let msg = SubscriptionMessage::new("result", sink.subscription_id(), &item)?;
-        sink.send(msg).await?;
+        let json = serde_json::value::to_raw_value(&item)?;
+        sink.send(json).await?;
     }
     Ok(())
 }

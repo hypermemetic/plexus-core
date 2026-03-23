@@ -986,6 +986,71 @@ impl DynamicHub {
             }
         )?;
 
+        // Register debug endpoints if PLEXUS_DEBUG environment variable is set
+        if std::env::var("PLEXUS_DEBUG").unwrap_or_default() == "true" {
+            tracing::info!("PLEXUS_DEBUG=true: Debug endpoints enabled");
+
+            // Register _debug.protocol_test endpoint (Ticket 1.2)
+            module.register_subscription(
+                "_debug.protocol_test",
+                PLEXUS_NOTIF_METHOD,
+                "_debug.protocol_test_unsub",
+                |_params, pending, _ctx, _ext| {
+                    Box::pin(async move {
+                        let stream = super::debug::protocol_test();
+                        pipe_stream_to_subscription(pending, stream).await
+                    })
+                }
+            )?;
+
+            // Register _debug.stream_test endpoint (Ticket 1.3)
+            module.register_subscription(
+                "_debug.stream_test",
+                PLEXUS_NOTIF_METHOD,
+                "_debug.stream_test_unsub",
+                |params, pending, _ctx, _ext| {
+                    Box::pin(async move {
+                        let p: serde_json::Value = params.parse().unwrap_or(serde_json::json!({}));
+                        let stream = super::debug::stream_test(p).await;
+                        pipe_stream_to_subscription(pending, stream).await
+                    })
+                }
+            )?;
+
+            // Register _debug.error_test endpoint (Ticket 1.4)
+            module.register_subscription(
+                "_debug.error_test",
+                PLEXUS_NOTIF_METHOD,
+                "_debug.error_test_unsub",
+                |params, pending, _ctx, _ext| {
+                    Box::pin(async move {
+                        let p: serde_json::Value = params.parse().unwrap_or(serde_json::json!({}));
+                        let stream = super::debug::error_test(p).await;
+                        pipe_stream_to_subscription(pending, stream).await
+                    })
+                }
+            )?;
+
+            // Register _debug.metadata_test endpoint (Ticket 1.5)
+            module.register_subscription(
+                "_debug.metadata_test",
+                PLEXUS_NOTIF_METHOD,
+                "_debug.metadata_test_unsub",
+                |_params, pending, _ctx, _ext| {
+                    Box::pin(async move {
+                        let stream = super::debug::metadata_test();
+                        pipe_stream_to_subscription(pending, stream).await
+                    })
+                }
+            )?;
+
+            // TODO: Register additional debug endpoints here
+            // - _debug.subscriptions (future ticket)
+            // - _debug.metrics (future ticket)
+        } else {
+            tracing::debug!("PLEXUS_DEBUG not set: Debug endpoints disabled");
+        }
+
         // Register {ns}.respond method for WebSocket bidirectional responses
         // This allows clients to respond to server-initiated requests (like confirmations/prompts)
         let respond_method: &'static str = Box::leak(format!("{}.respond", ns).into_boxed_str());

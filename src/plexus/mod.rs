@@ -3,6 +3,7 @@
 
 pub mod bidirectional;
 pub mod context;
+pub mod debug;
 pub mod dispatch;
 pub mod errors;
 pub mod hub_context;

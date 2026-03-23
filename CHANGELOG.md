@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Debug Endpoints**: Four built-in debug endpoints for protocol validation and troubleshooting
+  - Enabled via `PLEXUS_DEBUG=true` environment variable
+  - `_debug.protocol_test` - Validates streaming protocol implementation (Data, Progress, Done)
+  - `_debug.stream_test` - Tests streaming scenarios (slow, large, many, progress)
+  - `_debug.error_test` - Controlled error scenarios for error handling validation (immediate, after_data, recoverable)
+  - `_debug.metadata_test` - Metadata edge cases and provenance chain testing
+  - Auto-registered when `PLEXUS_DEBUG=true` is set at server startup
+  - See DEBUGGING.md for comprehensive usage guide
+  - Implementation in `src/plexus/debug.rs`
+  - **Security**: Debug endpoints should never be enabled in production environments
+
 ### Changed
 
 - **BREAKING**: `DynamicHub::new()` now requires explicit namespace parameter

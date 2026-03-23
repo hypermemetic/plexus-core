@@ -115,6 +115,43 @@ let bridge = PlexusMcpBridge::new(hub);
 
 > **Important**: PlexusMcpBridge works with **any** activation. You can bridge a single activation directly, or use DynamicHub to expose multiple activations.
 
+## Debug Endpoints
+
+hub-core includes built-in debug endpoints for protocol validation and troubleshooting.
+
+### Enabling Debug Mode
+
+Set the `PLEXUS_DEBUG` environment variable to enable debug endpoints:
+
+```bash
+PLEXUS_DEBUG=true cargo run --bin your-backend
+```
+
+When enabled, four debug endpoints are automatically registered under the `_debug` namespace:
+
+- `_debug.protocol_test` - Validates all PlexusStreamItem types (Data, Progress, Done)
+- `_debug.stream_test` - Tests streaming patterns (slow, large, many, progress)
+- `_debug.error_test` - Generates controlled error scenarios
+- `_debug.metadata_test` - Tests metadata edge cases and provenance chains
+
+### Usage
+
+```bash
+# Test basic protocol
+synapse substrate _debug.protocol_test
+
+# Test streaming scenarios
+synapse substrate _debug.stream_test --scenario slow
+synapse substrate _debug.stream_test --scenario large
+
+# Test error handling
+synapse substrate _debug.error_test --error_type immediate
+```
+
+**Security Warning**: Debug endpoints expose internal system behavior. Never enable `PLEXUS_DEBUG` in production environments.
+
+See `src/plexus/debug.rs` for detailed endpoint documentation, or see `DEBUGGING.md` for a comprehensive debugging guide.
+
 ## Architecture Patterns
 
 ### Hub Activations

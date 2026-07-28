@@ -155,6 +155,7 @@ pub mod entry;
 pub mod error;
 pub mod event;
 pub mod handler;
+pub mod turn_shape;
 pub mod ids;
 
 /// PLX-88 measurement scaffolding. Not part of the runtime; compiled only under
